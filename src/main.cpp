@@ -10,6 +10,7 @@ TaskHandle_t Task1;
 
 #define CHUNK_SIZE 500 // Adjust based on your MTU can be 512 but might not be compatible on some crap
 #define BUTTON_PIN 12  // start ble server if true
+#define START_LOGGING_PIN 2
 const uint8_t tachoInput = 13;
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
@@ -32,12 +33,14 @@ size_t currentFilePosition = 0; // Track the current position in the file
 size_t fileSize = 0;
 bool makeTimeStamp = true; // currently used to identify Log files
 TinyGPSPlus gps;
-String logId; // becomes the log name
 
 String formattedDay;
 String formattedmonth;
 String formattedHour;
 String formattedMin;
+
+String logId; // becomes the log name
+bool loggerStarted = false;
 
 // buffer stuff -------------------------------------------------------------------------
 String logBuffer = ""; // Buffer to hold GPS data
@@ -48,7 +51,7 @@ unsigned long lastFlushTime = 0;
 
 // rpm stuff -------------------------------------------------------------------------
 unsigned long rpm = 0;
-hw_timer_t *timer0 = NULL;                // Declare a pointer to a hardware timer object
+hw_timer_t *timer0 = NULL;             // Declare a pointer to a hardware timer object
 unsigned long minValidPulseLength = 1; // Adjust as needed (in millis)
 unsigned long lastPulseTime;
 unsigned long rotation = 0;
@@ -67,12 +70,18 @@ unsigned long previousLowPulseTimeStamp = 0;
 // rpm stuff --------------------------------------------------------------------------
 
 // logging times-----------------------------------------------------------------------
-unsigned long lastTemperatureLogTime = 0;          // For tracking temperature logging
+unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
+unsigned long lastTempTime1 = 0;
+unsigned long lastTempTime2 = 0;
+
 unsigned long lastGpsLogTime = 0;                  // For tracking GPS logging
 unsigned long lastRpmLogTime = 0;                  // For tracking RPM logging
 const unsigned long temperatureLogInterval = 1000; // 1 Hz = 1000 ms
-const unsigned long gpsLogInterval = 100;          // 10 Hz = 100 ms
-const unsigned long rpmLogInterval = 100;          // 1 Hz = 1000 ms
+const unsigned long tempLogInterval1 = 100;        // 1 Hz = 1000 ms
+const unsigned long tempLogInterval2 = 100;        // 1 Hz = 1000 ms
+
+const unsigned long gpsLogInterval = 100; // 10 Hz = 100 ms
+const unsigned long rpmLogInterval = 100; // 1 Hz = 1000 ms
 
 //--------------------------------------------------------------------------------------------------------
 const char UBLOX_INIT[] PROGMEM = {
@@ -401,7 +410,7 @@ void startBLEServer()
 }
 //--------------------------------------------------------------------------------------
 
-bool checkStartCondition()
+bool checkServerStartCondition()
 {
     // Check if the button is pressed
     if (digitalRead(BUTTON_PIN) == HIGH)
@@ -486,53 +495,12 @@ void Task1code(void *parameter) //------------------- core 0 -------------------
 
     for (;;)
 
-     {
-         duration = pulseIn(tachoInput, LOW);
-
-         //     unsigned long currentMillis = millis();
-         //     // Serial.print("Task1 running on core ");
-         //     // Serial.println(xPortGetCoreID());
-
-         //     if (digitalRead(tachoInput) == LOW && flag == false)
-         //     {
-         //         startLowPulseTimer = currentMillis;
-         //         flag = true;
-         //     }
-
-         //     if (digitalRead(tachoInput) == LOW && (currentMillis - startLowPulseTimer >= minValidPulseLength))
-         //     {
-         //         validLowPulse = true;
-         //     }
-
-         //     if (digitalRead(tachoInput) == HIGH && flag2 == false)
-         //     {
-         //         startHighPulseTimer = millis();
-         //         flag2 = true;
-         //     }
-
-         //     if (digitalRead(tachoInput) == HIGH && (millis() - startHighPulseTimer >= minValidPulseLength))
-         //     {
-         //         validHighPulse = true;
-         //     }
-
-         //     if (validLowPulse && validHighPulse)
-         //     {
-
-         //         // Calculate duration as the time between low pulse and high pulse
-         //         duration = previousLowPulseTimeStamp - startLowPulseTimer;
-         //         previousLowPulseTimeStamp = startLowPulseTimer;
-
-         //         // Reset flags and valid pulse indicators
-         //         validLowPulse = false;
-         //         validHighPulse = false;
-         //         flag = false;
-         //         flag2 = false;
-
-         //     }
-          
-     }
+    {
+        //     // Serial.print("Task1 running on core ");
+        //     // Serial.println(xPortGetCoreID());
+    }
 }
-// rpm = 60000000 / startLowPulseTimer - startHighPulseTimer;
+
 void setup()
 {
     Serial.begin(115200);
@@ -607,7 +575,7 @@ void setup()
     //     Serial.println("Old file does not exist");
     // }
     // na1410202420:30.txt
-    String filePath = "/na0411202418:24.txt";
+    String filePath = "/wo1001202519:06.txt";
 
     // Check if the file exists before trying to remove it
     if (LittleFS.exists(filePath))
@@ -645,11 +613,12 @@ void setup()
     //-----------------------------------------------------------------------
 
     // Initialize the button pin
+    pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
     pinMode(tachoInput, INPUT);
 
     // Initial check in setup to see if BLE server should start right away
-    if (checkStartCondition())
+    if (checkServerStartCondition())
     {
         startBLEServer();
         isBleServerStarted = true; // Set flag to indicate BLE server has started
@@ -662,12 +631,7 @@ void setup()
 
 void loop()
 {
-    rpm = 60000 / duration;
-   // Serial.println(duration);
 
-    // Serial.print("rpm= ");
-   // Serial.println(rpm);
-    //  delay(1000);         //delay already here needed for ble?? test upload??
     //   Serial.print("loop running on core ");
     //   Serial.println(xPortGetCoreID());
 
@@ -676,7 +640,7 @@ void loop()
     // Only check and start BLE server if it's not already started
     if (!isBleServerStarted)
     {
-        if (checkStartCondition())
+        if (checkServerStartCondition())
         {
             startBLEServer();          // Start BLE server
             isBleServerStarted = true; // Set the flag to prevent re-calling the function
@@ -685,101 +649,79 @@ void loop()
 
     //---------------------------------------------------------------------------------------------
 
-        while (Serial2.available() > 0)
+    while (Serial2.available() > 0)
+    {
+
+        double currentLat = gps.location.lat();
+        double currentLng = gps.location.lng();
+        float mph = gps.speed.mph();
+
+        gps.encode(Serial2.read());
+
+        if ((gps.location.isUpdated()) & (makeTimeStamp == true))
         {
 
-            double currentLat = gps.location.lat();
-            double currentLng = gps.location.lng();
-            float mph = gps.speed.mph();
+            String venue = detectVenue(gps.location.lat(), gps.location.lng());
 
-            gps.encode(Serial2.read());
+            int day = (gps.date.day());
+            int month = (gps.date.month());
+            int year = (gps.date.year());
+            int hour = (gps.time.hour());
+            int min = (gps.time.minute());
+            makeTimeStamp = false;
 
-            if ((gps.location.isUpdated()) & (makeTimeStamp == true))
+            if (day < 10)
             {
-
-                String venue = detectVenue(gps.location.lat(), gps.location.lng());
-
-                int day = (gps.date.day());
-                int month = (gps.date.month());
-                int year = (gps.date.year());
-                int hour = (gps.time.hour());
-                int min = (gps.time.minute());
-                makeTimeStamp = false;
-
-                if (day < 10)
-                {
-                    String modDay = String(day);
-                    formattedDay = "0" + modDay; // should add a zero if day less than 10, eg: returns 02 instead of 2,
-                }
-                else
-                {
-                    formattedDay = day;
-                }
-
-                if (month < 10)
-                {
-                    String modmonth = String(month);
-                    formattedmonth = "0" + modmonth;
-                }
-                else
-                {
-                    formattedmonth = month;
-                }
-                if (hour < 10)
-                {
-                    String modHour = String(hour);
-                    formattedHour = "0" + modHour;
-                }
-                else
-                {
-                    formattedHour = hour;
-                }
-                if (min < 10)
-                {
-                    String modMin = String(min);
-                    formattedMin = "0" + modMin;
-                }
-                else
-                {
-                    formattedMin = min;
-                }
-
-                logId = "/" + String(venue) + String(formattedDay) + String(formattedmonth) + String(year) + String(formattedHour) + ":" + String(formattedMin) + ".txt"; // assemble a file name from the gps time
+                String modDay = String(day);
+                formattedDay = "0" + modDay; // should add a zero if day less than 10, eg: returns 02 instead of 2,
             }
-    //---------------------------------------------------------------------------------------------
-
-            if (gps.location.isUpdated())
+            else
             {
-                unsigned long currentTime = millis();
-
-                if (currentTime - lastGpsLogTime >= gpsLogInterval)
-                {
-                    lastGpsLogTime = currentTime;
-                    String gpsData = "G," + String(currentLat, 6) + "," + String(currentLng, 6) + "," + String(mph, 1) + "," + String(currentTime) + ",";
-
-                    logBuffer += gpsData;
-
-                    // Check if the buffer needs to be flushed
-                    if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-                    {
-                        flushBuffer(logBuffer);
-                    }
-
-                    // if (fsHandler.appendData(logId.c_str(), gpsData.c_str()))
-                    // {
-                    // //    Serial.println("GPS data written to " + logId);
-                    // }
-                }
+                formattedDay = day;
             }
 
-            // Temperature Data
-            if (millis() - lastTemperatureLogTime >= temperatureLogInterval && gps.location.isUpdated())
+            if (month < 10)
             {
-                lastTemperatureLogTime = millis();
-                float temperature = 65;                                                      // readTemperature();   // later....
-                String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
+                String modmonth = String(month);
+                formattedmonth = "0" + modmonth;
+            }
+            else
+            {
+                formattedmonth = month;
+            }
+            if (hour < 10)
+            {
+                String modHour = String(hour);
+                formattedHour = "0" + modHour;
+            }
+            else
+            {
+                formattedHour = hour;
+            }
+            if (min < 10)
+            {
+                String modMin = String(min);
+                formattedMin = "0" + modMin;
+            }
+            else
+            {
+                formattedMin = min;
+            }
 
-                logBuffer += engTempData;
+            logId = "/" + String(venue) + String(formattedDay) + String(formattedmonth) + String(year) + String(formattedHour) + ":" + String(formattedMin) + ".txt"; // assemble a file name from the gps time
+        }
+        //---------------------------------------------------------------------------------------------
+
+        if (gps.location.isUpdated())
+        {
+            unsigned long currentTime = millis();
+
+            if (currentTime - lastGpsLogTime >= gpsLogInterval)
+            {
+                lastGpsLogTime = currentTime;
+                String gpsData = "G," + String(currentLat, 6) + "," + String(currentLng, 6) + "," + String(mph, 1) + "," + String(currentTime) + ",";
+
+                logBuffer += gpsData;
 
                 // Check if the buffer needs to be flushed
                 if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
@@ -787,32 +729,112 @@ void loop()
                     flushBuffer(logBuffer);
                 }
 
-                // if (fsHandler.appendData(logId.c_str(), tempData.c_str()))
+                // if (fsHandler.appendData(logId.c_str(), gpsData.c_str()))
                 // {
-                //    // Serial.println("Temperature data written to " + logId);
-                // }
-            }
-
-            // Rpm Data
-             if (millis() - lastRpmLogTime >= rpmLogInterval && gps.location.isUpdated())
-
-            {
-                lastRpmLogTime = millis();
-                                                                        // readTemperature();   // later....
-
-             String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
-
-                logBuffer += rpmData;
-
-                // Check if the buffer needs to be flushed
-                if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-                {
-                    flushBuffer(logBuffer);
-                }
-                // if (fsHandler.appendData(logId.c_str(), rpmData.c_str()))
-                // {
-                //   //  Serial.println("RPM data written to " + logId);
+                // //    Serial.println("GPS data written to " + logId);
                 // }
             }
         }
+
+        // Temperature Data
+        if (millis() - lastTemperatureLogTime >= temperatureLogInterval && gps.location.isUpdated())
+        {
+            lastTemperatureLogTime = millis();
+            float temperature = 65;                                                             // readTemperature();   // later....
+            String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
+
+            logBuffer += engTempData;
+
+            // Check if the buffer needs to be flushed
+            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            {
+                flushBuffer(logBuffer);
+            }
+
+            // if (fsHandler.appendData(logId.c_str(), tempData.c_str()))
+            // {
+            //    // Serial.println("Temperature data written to " + logId);
+            // }
+        }
+
+        // Rpm Data
+        if (millis() - lastRpmLogTime >= rpmLogInterval && gps.location.isUpdated())
+
+        {
+            lastRpmLogTime = millis();
+            // readTemperature();   // later....
+
+            String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
+
+            logBuffer += rpmData;
+
+            // Check if the buffer needs to be flushed
+            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            {
+                flushBuffer(logBuffer);
+            }
+            // if (fsHandler.appendData(logId.c_str(), rpmData.c_str()))
+            // {
+            //   //  Serial.println("RPM data written to " + logId);
+            // }
+        }
+    }
+
+    //-------------------------- TEST STUFF -----------------------
+
+    logId = "/ho1101202508:05.txt"; // assemble a file name from the gps time
+
+    if (!loggerStarted  && START_LOGGING_PIN == HIGH)
+    {
+        //loggerStarted = true; // Set the flag to prevent re-calling the function
+        Serial.println("Logging Started");
+    }
+
+    if (loggerStarted)
+    {
+        //unsigned long currentMillis = millis();
+        // Temperature Data
+        if (millis() - lastTemperatureLogTime >= temperatureLogInterval)
+        {
+            lastTemperatureLogTime = millis();
+            float temperature = 65;                                                             // readTemperature();   // later....
+            String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
+
+            logBuffer += engTempData;
+
+            // Check if the buffer needs to be flushed
+            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            {
+                flushBuffer(logBuffer);
+            }
+        }
+        if (millis() - lastTempTime1 >= tempLogInterval1)
+        {
+            lastTempTime1 = millis();
+            float rpm = 1165;                                                   // readTemperature();   // later....
+            String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
+
+            logBuffer += rpmData;
+
+            // Check if the buffer needs to be flushed
+            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            {
+                flushBuffer(logBuffer);
+            }
+        }
+        if (millis() - lastTempTime2 >= tempLogInterval2)
+        {
+            lastTempTime2 = millis();
+            float psi = 123;                                                    // readTemperature();   // later....
+            String psiData = "P," + String(rpm) + "," + String(millis()) + ","; // Append current time
+
+            logBuffer += psiData;
+
+            // Check if the buffer needs to be flushed
+            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            {
+                flushBuffer(logBuffer);
+            }
+        }
+    }
 }

@@ -10,7 +10,8 @@ TaskHandle_t Task1;
 
 #define CHUNK_SIZE 500 // Adjust based on your MTU can be 512 but might not be compatible on some crap
 #define BUTTON_PIN 12  // start ble server if true
-#define START_LOGGING_PIN 2
+#define START_LOGGING_PIN 15
+#define LED 22
 const uint8_t tachoInput = 13;
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
@@ -39,15 +40,30 @@ String formattedmonth;
 String formattedHour;
 String formattedMin;
 
-String logId; // becomes the log name
+// String logId; // becomes the log name
+
 bool loggerStarted = false;
 
-// buffer stuff -------------------------------------------------------------------------
-String logBuffer = ""; // Buffer to hold GPS data
+// Header at FRAM address 0
+struct FramLogHeader
+{
+    char fileName[32];
+    size_t dataLength;
+};
 
-const int bufferSize = 512;     // Adjust buffer size as needed
-const int flushInterval = 1000; // Flush buffer every second (1000 ms)
+
+// buffer stuff -------------------------------------------------------------------------
+String logBuffer = "";  // Buffer to hold GPS data
+String logBuffer2 = ""; // Buffer to hold GPS data
+
+bool useBuffer2 = false; // Flag to switch between buffers
+
+const int bufferSize = 4048;     // Buffer size
+const int buffer2Size = 4048;    
+const int flushInterval = 1000; // Flush buffer every second (1000 ms) 3000 before
 unsigned long lastFlushTime = 0;
+
+String logId = "/ho1901202516:55.txt"; // temp name for debug, change back later, line 42
 
 // rpm stuff -------------------------------------------------------------------------
 unsigned long rpm = 0;
@@ -74,14 +90,14 @@ unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
 unsigned long lastTempTime1 = 0;
 unsigned long lastTempTime2 = 0;
 
-unsigned long lastGpsLogTime = 0;                  // For tracking GPS logging
-unsigned long lastRpmLogTime = 0;                  // For tracking RPM logging
-const unsigned long temperatureLogInterval = 1000; // 1 Hz = 1000 ms
-const unsigned long tempLogInterval1 = 100;        // 1 Hz = 1000 ms
-const unsigned long tempLogInterval2 = 100;        // 1 Hz = 1000 ms
+unsigned long lastGpsLogTime = 0; // For tracking GPS logging
+unsigned long lastRpmLogTime = 0; // For tracking RPM logging
+const unsigned long temperatureLogInterval = 1000;
+const unsigned long tempLogInterval1 = 100;
+const unsigned long tempLogInterval2 = 100;
 
-const unsigned long gpsLogInterval = 100; // 10 Hz = 100 ms
-const unsigned long rpmLogInterval = 100; // 1 Hz = 1000 ms
+const unsigned long gpsLogInterval = 100;
+const unsigned long rpmLogInterval = 100;
 
 //--------------------------------------------------------------------------------------------------------
 const char UBLOX_INIT[] PROGMEM = {
@@ -475,56 +491,125 @@ String detectVenue(float currentLatitude, float currentLongitude)
     }
 }
 
-void flushBuffer(String data)
+// void logData()
+// {
+//     // Get the current time
+//     unsigned long currentTime = millis();
+
+//     // Check if the temperature logging interval has elapsed
+//     if (currentTime - lastTemperatureLogTime >= temperatureLogInterval)
+//     {
+//         // Log temperature data
+//         // logTemperature();
+//         lastTemperatureLogTime = currentTime; // Update last temperature log time
+//     }
+
+//     // Check if the GPS logging interval has elapsed
+//     if (currentTime - lastGpsLogTime >= gpsLogInterval)
+//     {
+//         // Log GPS data
+//         // logGpsData();
+//         lastGpsLogTime = currentTime; // Update last GPS log time
+//     }
+
+//     // Check if the RPM logging interval has elapsed
+//     if (currentTime - lastRpmLogTime >= rpmLogInterval)
+//     {
+//         // Log RPM data
+//         // logRpmData();
+//         lastRpmLogTime = currentTime; // Update last RPM log time
+//     }
+// }
+
+void flushBuffer()
 {
+    String data;
+    if (useBuffer2 == false)
+    {
+        data = logBuffer;
+    }
+    else
+    {
+        data = logBuffer2;
+    }
 
     if (fsHandler.appendData(logId.c_str(), data.c_str()))
     {
-        //    Serial.println("GPS data written to " + logId);
-        logBuffer = "";           // Clear the buffer
+
+        if (useBuffer2 == false)
+        {
+            logBuffer = ""; // Clear the buffer
+        }
+        else
+        {
+            logBuffer2 = ""; // Clear the buffer
+        }
+
         lastFlushTime = millis(); // Update last flush time
+        // digitalWrite(LED, HIGH);
+        // vTaskDelay(5);
+        // digitalWrite(LED, LOW);
     }
-    // else
-    // {
-    //     Serial.println("Error opening file for writing");
-    // }
 }
 
-void Task1code(void *parameter) //------------------- core 0 ---------------------------------
+void Task1code(void *parameter) //------------------- core 1 ---------------------------------
 {
-
     for (;;)
-
     {
         //     // Serial.print("Task1 running on core ");
         //     // Serial.println(xPortGetCoreID());
+
+        if (millis() - lastFlushTime >= flushInterval)
+        {
+
+            if (useBuffer2 == false)
+            {
+                useBuffer2 = true;
+                flushBuffer();
+            }
+            else
+            {
+                useBuffer2 = false;
+                flushBuffer();
+            }
+        }
     }
 }
+//------------------ core 1 ----------------------------------------------------------------------
+
+//------------------- core 1 ----------------------------------------------------------------------
 
 void setup()
 {
     Serial.begin(115200);
     Serial2.begin(9600); // TX = GPIO 17 RX = 16
 
-    // xTaskCreatePinnedToCore(
-    //     Task1code, /* Function to implement the task */
-    //     "Task1",   /* Name of the task */
-    //     20000,     /* Stack size in words */
-    //     NULL,      /* Task input parameter */
-    //     0,         /* Priority of the task */
-    //     &Task1,    /* Task handle. */
-    //     0);        /* Core where the task should run */
+    //---------------------------------------- stuff----------------------------------------------------------------
+
+    xTaskCreatePinnedToCore(
+        Task1code, /* Function to implement the task */
+        "Task1",   /* Name of the task */
+        4000,      /* Stack size in words */
+        NULL,      /* Task input parameter */
+        1,         /* Priority of the task */
+        &Task1,    /* Task handle. */
+        1          /* Core where the task should run */
+    );
+
+    //---------------------------------------- stuff----------------------------------------------------------------
+
+    //---------------------------------------- stuff----------------------------------------------------------------
 
     //---------------------------------Timer/Tahco ----------------------------------------------------------------
 
     // /* Use 1st timer of 4,  the 0 is the first timer
     //   /* 1 tick takes 1/(80MHZ/80) = 1us so set divider to 80
 
-    //----------------------------------------tacho stuff----------------------------------------------------------------
+    //---------------------------------------- stuff----------------------------------------------------------------
 
     // timer0 = timerBegin(0, 80, true);              // Timer 0, prescaler of 80, count up
-    // timerAttachInterrupt(timer0, &rpmTimer, true); // Attach rpmTimer function to the timer
-    // timerAlarmWrite(timer0, 250000, true);         // Set alarm to call rpmTimer function every quarter second
+    // timerAttachInterrupt(timer0, &flushBuffer, true); // Attach rpmTimer function to the timer
+    // timerAlarmWrite(timer0, 10000000, true);         // Set alarm to call rpmTimer function every quarter second
     // timerAlarmEnable(timer0);                      // Enable the timer alarm
 
     // attachInterrupt(tachoInput, pulseChange, CHANGE); // Attach interrupt to the sensor pin
@@ -616,6 +701,7 @@ void setup()
     pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
     pinMode(tachoInput, INPUT);
+    pinMode(LED, OUTPUT);
 
     // Initial check in setup to see if BLE server should start right away
     if (checkServerStartCondition())
@@ -724,10 +810,10 @@ void loop()
                 logBuffer += gpsData;
 
                 // Check if the buffer needs to be flushed
-                if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-                {
-                    flushBuffer(logBuffer);
-                }
+                // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+                // {
+                //     flushBuffer(logBuffer);
+                // }
 
                 // if (fsHandler.appendData(logId.c_str(), gpsData.c_str()))
                 // {
@@ -746,10 +832,10 @@ void loop()
             logBuffer += engTempData;
 
             // Check if the buffer needs to be flushed
-            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            {
-                flushBuffer(logBuffer);
-            }
+            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            // {
+            //     flushBuffer(logBuffer);
+            // }
 
             // if (fsHandler.appendData(logId.c_str(), tempData.c_str()))
             // {
@@ -769,10 +855,10 @@ void loop()
             logBuffer += rpmData;
 
             // Check if the buffer needs to be flushed
-            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            {
-                flushBuffer(logBuffer);
-            }
+            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            // {
+            //     flushBuffer(logBuffer);
+            // }
             // if (fsHandler.appendData(logId.c_str(), rpmData.c_str()))
             // {
             //   //  Serial.println("RPM data written to " + logId);
@@ -780,61 +866,100 @@ void loop()
         }
     }
 
-    //-------------------------- TEST STUFF -----------------------
+    //-------------------------- TEST STUFF --------------------------------------------------------
 
-    logId = "/ho1101202508:05.txt"; // assemble a file name from the gps time
+    // logId = "/ho1201202513:30.txt"; // assemble a file name from the gps time
 
-    if (!loggerStarted  && START_LOGGING_PIN == HIGH)
+    if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
     {
-        //loggerStarted = true; // Set the flag to prevent re-calling the function
+        loggerStarted = true; // Set the flag to prevent re-calling the function
         Serial.println("Logging Started");
     }
 
     if (loggerStarted)
     {
-        //unsigned long currentMillis = millis();
-        // Temperature Data
+        // unsigned long currentMillis = millis();
+        //  Temperature Data
         if (millis() - lastTemperatureLogTime >= temperatureLogInterval)
         {
             lastTemperatureLogTime = millis();
             float temperature = 65;                                                             // readTemperature();   // later....
             String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
 
-            logBuffer += engTempData;
+            if (useBuffer2 == false)
+            {
+                logBuffer += engTempData;
+            }
+            else
+            {
+                logBuffer2 += engTempData;
+            }
 
             // Check if the buffer needs to be flushed
-            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            {
-                flushBuffer(logBuffer);
-            }
+            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            // {
+            //     flushBuffer(logBuffer);
+            // }
+            // if (logBuffer.length() >= bufferSize)
+            // {
+            //     flushBuffer;
+            // }
         }
+
+        //------------------------------------------------------------------------
+
         if (millis() - lastTempTime1 >= tempLogInterval1)
         {
             lastTempTime1 = millis();
             float rpm = 1165;                                                   // readTemperature();   // later....
             String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
 
-            logBuffer += rpmData;
+            if (useBuffer2 == false)
+            {
+                logBuffer += rpmData;
+            }
+            else
+            {
+                logBuffer2 += rpmData;
+            }
 
             // Check if the buffer needs to be flushed
-            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            {
-                flushBuffer(logBuffer);
-            }
+            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            // {
+            //     flushBuffer(logBuffer);
+            // }
+            // if (logBuffer.length() >= bufferSize)
+            // {
+            //     flushBuffer;
+            // }
         }
+        //------------------------------------------------------------------------
+
         if (millis() - lastTempTime2 >= tempLogInterval2)
         {
             lastTempTime2 = millis();
             float psi = 123;                                                    // readTemperature();   // later....
-            String psiData = "P," + String(rpm) + "," + String(millis()) + ","; // Append current time
+            String psiData = "P," + String(psi) + "," + String(millis()) + ","; // Append current time
 
-            logBuffer += psiData;
+            if (useBuffer2 == false)
+            {
+                logBuffer += psiData;
+            }
+            else
+            {
+                logBuffer2 += psiData;
+            }
 
             // Check if the buffer needs to be flushed
-            if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            {
-                flushBuffer(logBuffer);
-            }
+            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
+            // {
+            //     flushBuffer(logBuffer);
+            // }
+            // if (logBuffer.length() >= bufferSize)
+            // {
+            //     flushBuffer;
+            // }
         }
+        //------------------------------------------------------------------------
     }
 }

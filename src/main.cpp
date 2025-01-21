@@ -5,13 +5,19 @@
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
+#include "Adafruit_FRAM_I2C.h"
+#include <Adafruit_EEPROM_I2C.h>
+#include <SPI.h>
+
+// Create an instance of the Adafruit_FRAM_I2C class
+Adafruit_FRAM_I2C i2ceeprom = Adafruit_FRAM_I2C();
 
 TaskHandle_t Task1;
 
 #define CHUNK_SIZE 500 // Adjust based on your MTU can be 512 but might not be compatible on some crap
 #define BUTTON_PIN 12  // start ble server if true
 #define START_LOGGING_PIN 15
-#define LED 22
+#define LED 23
 const uint8_t tachoInput = 13;
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
@@ -40,7 +46,9 @@ String formattedmonth;
 String formattedHour;
 String formattedMin;
 
-// String logId; // becomes the log name
+//  stuff -------------------------------------------------------------------------
+
+// String logId; // becomes the log name, set in setup, re-enable later
 
 bool loggerStarted = false;
 
@@ -51,19 +59,20 @@ struct FramLogHeader
     size_t dataLength;
 };
 
+static const size_t HEADER_ADDRESS = 0;
+static const size_t DATA_START = sizeof(FramLogHeader);
+
+FramLogHeader header;
+size_t currentDataAddress = DATA_START;
 
 // buffer stuff -------------------------------------------------------------------------
-String logBuffer = "";  // Buffer to hold GPS data
-String logBuffer2 = ""; // Buffer to hold GPS data
+String logBuffer = ""; // Buffer to hold GPS data
 
-bool useBuffer2 = false; // Flag to switch between buffers
-
-const int bufferSize = 4048;     // Buffer size
-const int buffer2Size = 4048;    
+const int bufferSize = 1024;    // Buffer size
 const int flushInterval = 1000; // Flush buffer every second (1000 ms) 3000 before
 unsigned long lastFlushTime = 0;
 
-String logId = "/ho1901202516:55.txt"; // temp name for debug, change back later, line 42
+String logId = "/ho2001202522:56.txt"; // temp name for debug, change back later, line 43
 
 // rpm stuff -------------------------------------------------------------------------
 unsigned long rpm = 0;
@@ -521,60 +530,60 @@ String detectVenue(float currentLatitude, float currentLongitude)
 //     }
 // }
 
-void flushBuffer()
+void startLogging(const char *name)
 {
-    String data;
-    if (useBuffer2 == false)
-    {
-        data = logBuffer;
-    }
-    else
-    {
-        data = logBuffer2;
-    }
+    // Fill header with initial values
 
-    if (fsHandler.appendData(logId.c_str(), data.c_str()))
-    {
-
-        if (useBuffer2 == false)
-        {
-            logBuffer = ""; // Clear the buffer
-        }
-        else
-        {
-            logBuffer2 = ""; // Clear the buffer
-        }
-
-        lastFlushTime = millis(); // Update last flush time
-        // digitalWrite(LED, HIGH);
-        // vTaskDelay(5);
-        // digitalWrite(LED, LOW);
-    }
+    strncpy(header.fileName, name, sizeof(header.fileName) - 1);
+    header.fileName[sizeof(header.fileName) - 1] = '\0'; // Ensure null-termination
+    header.dataLength = 0;
+    i2ceeprom.writeObject(HEADER_ADDRESS, header);
+    currentDataAddress = DATA_START;
+    Serial.println("Logging started");
 }
+
+void flushBuffer(String *data, size_t len)
+{
+    i2ceeprom.writeObject(currentDataAddress, data); // Write the chunk at currentDataAddress
+    logBuffer = "";                                  // Clear the buffer
+    header.dataLength += len;                        // Update header info
+    i2ceeprom.writeObject(HEADER_ADDRESS, header);   // Write the updated header to FRAM so it's valid if power is lost
+    currentDataAddress += len;
+    digitalWrite(LED, HIGH);
+    vTaskDelay(250);
+    digitalWrite(LED, LOW);
+    Serial.println("Buffer flushed");
+}
+
+// void flushBufer()
+// {
+//     String data;
+
+//         data = logBuffer;
+
+//     if (fsHandler.appendData(logId.c_str(), data.c_str()))
+//     {
+
+//             logBuffer = ""; // Clear the buffer
+
+//         // digitalWrite(LED, HIGH);
+//         // vTaskDelay(5);
+//         // digitalWrite(LED, LOW);
+//     }
+// }
 
 void Task1code(void *parameter) //------------------- core 1 ---------------------------------
 {
+    String *logBuffer = static_cast<String *>(parameter); // Cast the parameter to String*
     for (;;)
     {
-        //     // Serial.print("Task1 running on core ");
-        //     // Serial.println(xPortGetCoreID());
-
-        if (millis() - lastFlushTime >= flushInterval)
+        if (logBuffer->length() >= bufferSize)
         {
-
-            if (useBuffer2 == false)
-            {
-                useBuffer2 = true;
-                flushBuffer();
-            }
-            else
-            {
-                useBuffer2 = false;
-                flushBuffer();
-            }
+            flushBuffer(reinterpret_cast<const uint8_t *>(logBuffer->c_str()), logBuffer->length());
         }
     }
 }
+
 //------------------ core 1 ----------------------------------------------------------------------
 
 //------------------- core 1 ----------------------------------------------------------------------
@@ -589,8 +598,8 @@ void setup()
     xTaskCreatePinnedToCore(
         Task1code, /* Function to implement the task */
         "Task1",   /* Name of the task */
-        4000,      /* Stack size in words */
-        NULL,      /* Task input parameter */
+        4096,      /* Stack size in words */
+       &logBuffer,      /* Task input parameter */
         1,         /* Priority of the task */
         &Task1,    /* Task handle. */
         1          /* Core where the task should run */
@@ -622,7 +631,7 @@ void setup()
         Serial2.write(pgm_read_byte(UBLOX_INIT + i));
         delay(5); // simulating a 38400baud pace (or less), otherwise commands are not accepted by the device.
     }
-
+    //-----------------------------------------------------------------------
     if (!fsHandler.begin())
     {
         Serial.println("Failed to initialize LittleFS");
@@ -636,6 +645,18 @@ void setup()
         }
         return;
     }
+    //-----------------------------------------------------------------------
+    if (i2ceeprom.begin(0x50))
+    { // you can stick the new i2c addr in here, e.g. begin(0x51);
+        Serial.println("Found I2C EEPROM");
+    }
+    else
+    {
+        Serial.println("I2C EEPROM not identified ... check your connections?\r\n");
+        while (1)
+            delay(10);
+    }
+    //-----------------------------------------------------------------------
     // Paths for the old and new filenames
     // String oldFilePath = "/2203202422:21.txt";
     // String newFilePath = "/na2203202422:21.txt";
@@ -660,8 +681,9 @@ void setup()
     //     Serial.println("Old file does not exist");
     // }
     // na1410202420:30.txt
-    String filePath = "/wo1001202519:06.txt";
 
+    //-----------------------------------------------------------------------
+    String filePath = "/wo1001202519:06.txt"; // File to delete
     // Check if the file exists before trying to remove it
     if (LittleFS.exists(filePath))
     {
@@ -702,6 +724,7 @@ void setup()
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
     pinMode(tachoInput, INPUT);
     pinMode(LED, OUTPUT);
+   
 
     // Initial check in setup to see if BLE server should start right away
     if (checkServerStartCondition())
@@ -868,17 +891,16 @@ void loop()
 
     //-------------------------- TEST STUFF --------------------------------------------------------
 
-    // logId = "/ho1201202513:30.txt"; // assemble a file name from the gps time
-
     if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
     {
         loggerStarted = true; // Set the flag to prevent re-calling the function
-        Serial.println("Logging Started");
+        startLogging(logId.c_str());
+        Serial.println("Logging Button Pressed");
     }
 
     if (loggerStarted)
     {
-        // unsigned long currentMillis = millis();
+
         //  Temperature Data
         if (millis() - lastTemperatureLogTime >= temperatureLogInterval)
         {
@@ -886,80 +908,29 @@ void loop()
             float temperature = 65;                                                             // readTemperature();   // later....
             String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
 
-            if (useBuffer2 == false)
-            {
-                logBuffer += engTempData;
-            }
-            else
-            {
-                logBuffer2 += engTempData;
-            }
-
-            // Check if the buffer needs to be flushed
-            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            // {
-            //     flushBuffer(logBuffer);
-            // }
-            // if (logBuffer.length() >= bufferSize)
-            // {
-            //     flushBuffer;
-            // }
+            logBuffer += engTempData;
         }
-
-        //------------------------------------------------------------------------
-
-        if (millis() - lastTempTime1 >= tempLogInterval1)
-        {
-            lastTempTime1 = millis();
-            float rpm = 1165;                                                   // readTemperature();   // later....
-            String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
-
-            if (useBuffer2 == false)
-            {
-                logBuffer += rpmData;
-            }
-            else
-            {
-                logBuffer2 += rpmData;
-            }
-
-            // Check if the buffer needs to be flushed
-            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            // {
-            //     flushBuffer(logBuffer);
-            // }
-            // if (logBuffer.length() >= bufferSize)
-            // {
-            //     flushBuffer;
-            // }
-        }
-        //------------------------------------------------------------------------
-
-        if (millis() - lastTempTime2 >= tempLogInterval2)
-        {
-            lastTempTime2 = millis();
-            float psi = 123;                                                    // readTemperature();   // later....
-            String psiData = "P," + String(psi) + "," + String(millis()) + ","; // Append current time
-
-            if (useBuffer2 == false)
-            {
-                logBuffer += psiData;
-            }
-            else
-            {
-                logBuffer2 += psiData;
-            }
-
-            // Check if the buffer needs to be flushed
-            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            // {
-            //     flushBuffer(logBuffer);
-            // }
-            // if (logBuffer.length() >= bufferSize)
-            // {
-            //     flushBuffer;
-            // }
-        }
-        //------------------------------------------------------------------------
     }
+
+    //------------------------------------------------------------------------
+
+    if (millis() - lastTempTime1 >= tempLogInterval1)
+    {
+        lastTempTime1 = millis();
+        float rpm = 1165;                                                   // readTemperature();   // later....
+        String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
+
+        logBuffer += rpmData;
+    }
+    //------------------------------------------------------------------------
+
+    if (millis() - lastTempTime2 >= tempLogInterval2)
+    {
+        lastTempTime2 = millis();
+        float psi = 123;                                                    // readTemperature();   // later....
+        String psiData = "P," + String(psi) + "," + String(millis()) + ","; // Append current time
+
+        logBuffer += psiData;
+    }
+    //------------------------------------------------------------------------
 }

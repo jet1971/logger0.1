@@ -55,7 +55,7 @@ bool loggerStarted = false;
 // Header at FRAM address 0
 struct FramLogHeader
 {
-    char fileName[32];
+    char fileName[22];
     size_t dataLength;
 };
 
@@ -63,6 +63,7 @@ static const size_t HEADER_ADDRESS = 0;
 static const size_t DATA_START = sizeof(FramLogHeader);
 
 FramLogHeader header;
+FramLogHeader header2;
 size_t currentDataAddress = DATA_START;
 
 // buffer stuff -------------------------------------------------------------------------
@@ -530,29 +531,43 @@ String detectVenue(float currentLatitude, float currentLongitude)
 //     }
 // }
 
-void startLogging(const char *name)
+void setFramHeader(const char *name)
 {
     // Fill header with initial values
 
-    strncpy(header.fileName, name, sizeof(header.fileName) - 1);
-    header.fileName[sizeof(header.fileName) - 1] = '\0'; // Ensure null-termination
-    header.dataLength = 0;
-    i2ceeprom.writeObject(HEADER_ADDRESS, header);
-    currentDataAddress = DATA_START;
-    Serial.println("Logging started");
+    strncpy(header.fileName, name, sizeof(header.fileName) - 1);    // copy "name" to header.filename, the sizeof bit tells the function how many characters to copy? maybe
+    header.fileName[sizeof(header.fileName) - 1] = '\0';            // Ensure null-termination
+    header.dataLength = 0;                                          // length of the datalog not the header
+    i2ceeprom.writeObject(HEADER_ADDRESS, header);                  // starts at ;osition 0
+    currentDataAddress = DATA_START;                                // first time currentDataAddress set by length of the header
+    Serial.println("Filename set, Logging started");
+    Serial.println(header.fileName);
+    Serial.println(sizeof(header.fileName));
 }
 
-void flushBuffer(String *data, size_t len)
+// void flushBuffer(String data, size_t len)
+// {
+//    // Serial.println(data);
+//     i2ceeprom.writeObject(currentDataAddress, data); // Write the chunk at currentDataAddress
+//     logBuffer = "";                                  // Clear the buffer
+//     header.dataLength += len;                        // Update header info
+//     i2ceeprom.writeObject(HEADER_ADDRESS, header);   // Write the updated header to FRAM so it's valid if power is lost
+//     currentDataAddress += len;
+//     Serial.println("Buffer flushed");
+//     Serial.println(header.dataLength);
+// }
+
+    
+
+void flushBuffer(String data, size_t len)
 {
-    i2ceeprom.writeObject(currentDataAddress, data); // Write the chunk at currentDataAddress
-    logBuffer = "";                                  // Clear the buffer
-    header.dataLength += len;                        // Update header info
-    i2ceeprom.writeObject(HEADER_ADDRESS, header);   // Write the updated header to FRAM so it's valid if power is lost
-    currentDataAddress += len;
-    digitalWrite(LED, HIGH);
-    vTaskDelay(250);
-    digitalWrite(LED, LOW);
-    Serial.println("Buffer flushed");
+    uint8_t buffer[bufferSize];                                 // This buffer is required by the write function below
+    memcpy(buffer, data.c_str(), bufferSize);                   // Use c_str() to get the C-style string
+    logBuffer = "";                                             // Clear the buffer
+    i2ceeprom.write(currentDataAddress, buffer, bufferSize);    // Write the chunk at currentDataAddress  
+    header.dataLength += bufferSize;                            // Update header info
+    i2ceeprom.writeObject(HEADER_ADDRESS, header);              // Write the updated header to FRAM so it's valid if power is lost
+    currentDataAddress += bufferSize;
 }
 
 // void flushBufer()
@@ -572,17 +587,17 @@ void flushBuffer(String *data, size_t len)
 //     }
 // }
 
-void Task1code(void *parameter) //------------------- core 1 ---------------------------------
-{
-    String *logBuffer = static_cast<String *>(parameter); // Cast the parameter to String*
-    for (;;)
-    {
-        if (logBuffer->length() >= bufferSize)
-        {
-            flushBuffer(reinterpret_cast<const uint8_t *>(logBuffer->c_str()), logBuffer->length());
-        }
-    }
-}
+// void Task1code(void *parameter) //------------------- core 1 ---------------------------------
+// {
+//     String *logBuffer = static_cast<String *>(parameter); // Cast the parameter to String*
+//     for (;;)
+//     {
+//         if (logBuffer->length() >= bufferSize)
+//         {
+//             flushBuffer(reinterpret_cast<const uint8_t *>(logBuffer->c_str()), logBuffer->length());
+//         }
+//     }
+// }
 
 //------------------ core 1 ----------------------------------------------------------------------
 
@@ -590,20 +605,24 @@ void Task1code(void *parameter) //------------------- core 1 -------------------
 
 void setup()
 {
+    FramLogHeader header2;
+    char s2[2200]; // Specify the size of the array
     Serial.begin(115200);
     Serial2.begin(9600); // TX = GPIO 17 RX = 16
 
+
+
     //---------------------------------------- stuff----------------------------------------------------------------
 
-    xTaskCreatePinnedToCore(
-        Task1code, /* Function to implement the task */
-        "Task1",   /* Name of the task */
-        4096,      /* Stack size in words */
-       &logBuffer,      /* Task input parameter */
-        1,         /* Priority of the task */
-        &Task1,    /* Task handle. */
-        1          /* Core where the task should run */
-    );
+    // xTaskCreatePinnedToCore(
+    //     Task1code, /* Function to implement the task */
+    //     "Task1",   /* Name of the task */
+    //     4096,      /* Stack size in words */
+    //    &logBuffer,      /* Task input parameter */
+    //     1,         /* Priority of the task */
+    //     &Task1,    /* Task handle. */
+    //     1          /* Core where the task should run */
+    // );
 
     //---------------------------------------- stuff----------------------------------------------------------------
 
@@ -656,46 +675,57 @@ void setup()
         while (1)
             delay(10);
     }
-    //-----------------------------------------------------------------------
-    // Paths for the old and new filenames
-    // String oldFilePath = "/2203202422:21.txt";
-    // String newFilePath = "/na2203202422:21.txt";
+    i2ceeprom.readObject(0x00, header2);
+      
+        Serial.println("This is the file name");
+        Serial.println(header2.fileName);
+        Serial.println("This is the data length");
+        Serial.println(header2.dataLength);
 
-    // Serial.println("here sir!");
+     //  i2ceeprom.read(0x16, s2);
+    //    Serial.println("This is the data length");
+        Serial.println(s2[10000]);
 
-    // // Check if the old file exists before renaming
-    // if (LittleFS.exists(oldFilePath))
-    // {
-    //     // Attempt to rename the file
-    //     if (LittleFS.rename(oldFilePath, newFilePath))
-    //     {
-    //         Serial.println("File renamed successfully");
-    //     }
-    //     else
-    //     {
-    //         Serial.println("Failed to rename file");
-    //     }
-    // }
-    // else
-    // {
-    //     Serial.println("Old file does not exist");
-    // }
-    // na1410202420:30.txt
+        //-----------------------------------------------------------------------
+        // Paths for the old and new filenames
+        // String oldFilePath = "/2203202422:21.txt";
+        // String newFilePath = "/na2203202422:21.txt";
 
-    //-----------------------------------------------------------------------
-    String filePath = "/wo1001202519:06.txt"; // File to delete
-    // Check if the file exists before trying to remove it
-    if (LittleFS.exists(filePath))
-    {
-        // Remove the file
-        if (LittleFS.remove(filePath))
+        // Serial.println("here sir!");
+
+        // // Check if the old file exists before renaming
+        // if (LittleFS.exists(oldFilePath))
+        // {
+        //     // Attempt to rename the file
+        //     if (LittleFS.rename(oldFilePath, newFilePath))
+        //     {
+        //         Serial.println("File renamed successfully");
+        //     }
+        //     else
+        //     {
+        //         Serial.println("Failed to rename file");
+        //     }
+        // }
+        // else
+        // {
+        //     Serial.println("Old file does not exist");
+        // }
+        // na1410202420:30.txt
+
+        //-----------------------------------------------------------------------
+        String filePath = "/wo1001202519:06.txt"; // File to delete
+        // Check if the file exists before trying to remove it
+        if (LittleFS.exists(filePath))
         {
-            Serial.println("File deleted successfully");
-        }
-        else
-        {
-            Serial.println("Failed to delete file");
-        }
+            // Remove the file
+            if (LittleFS.remove(filePath))
+            {
+                Serial.println("File deleted successfully");
+            }
+            else
+            {
+                Serial.println("Failed to delete file");
+            }
     }
     else
     {
@@ -724,7 +754,6 @@ void setup()
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
     pinMode(tachoInput, INPUT);
     pinMode(LED, OUTPUT);
-   
 
     // Initial check in setup to see if BLE server should start right away
     if (checkServerStartCondition())
@@ -893,9 +922,9 @@ void loop()
 
     if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
     {
-        loggerStarted = true; // Set the flag to prevent re-calling the function
-        startLogging(logId.c_str());
         Serial.println("Logging Button Pressed");
+        loggerStarted = true; // Set the flag to prevent re-calling the function
+        setFramHeader(logId.c_str());
     }
 
     if (loggerStarted)
@@ -909,28 +938,40 @@ void loop()
             String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
 
             logBuffer += engTempData;
+            if (logBuffer.length() >= bufferSize)
+            {
+                flushBuffer(logBuffer, logBuffer.length());
+            }
         }
-    }
 
-    //------------------------------------------------------------------------
+        //------------------------------------------------------------------------
 
-    if (millis() - lastTempTime1 >= tempLogInterval1)
-    {
-        lastTempTime1 = millis();
-        float rpm = 1165;                                                   // readTemperature();   // later....
-        String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
+        if (millis() - lastTempTime1 >= tempLogInterval1)
+        {
+            lastTempTime1 = millis();
+            float rpm = 1165;                                                   // readTemperature();   // later....
+            String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
 
-        logBuffer += rpmData;
-    }
-    //------------------------------------------------------------------------
+            logBuffer += rpmData;
+            if (logBuffer.length() >= bufferSize)
+            {
+                flushBuffer(logBuffer, logBuffer.length());
+            }
+        }
+        //------------------------------------------------------------------------
 
-    if (millis() - lastTempTime2 >= tempLogInterval2)
-    {
-        lastTempTime2 = millis();
-        float psi = 123;                                                    // readTemperature();   // later....
-        String psiData = "P," + String(psi) + "," + String(millis()) + ","; // Append current time
+        if (millis() - lastTempTime2 >= tempLogInterval2)
+        {
+            lastTempTime2 = millis();
+            float psi = 123;                                                    // readTemperature();   // later....
+            String psiData = "P," + String(psi) + "," + String(millis()) + ","; // Append current time
 
-        logBuffer += psiData;
+            logBuffer += psiData;
+            if (logBuffer.length() >= bufferSize)
+            {
+                flushBuffer(logBuffer, logBuffer.length());
+            }
+        }
     }
     //------------------------------------------------------------------------
 }

@@ -3,6 +3,10 @@
 		{
 			"name": "nimble_ble_2",
 			"path": "."
+		},
+		{
+			"name": "Fram test2 Robert Tilhard library",
+			"path": "../Fram test2 Robert Tilhard library"
 		}
 	],
 	"settings": {

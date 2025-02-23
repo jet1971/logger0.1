@@ -9,8 +9,8 @@ class LittleFSHandler
 public:
     LittleFSHandler();
     bool begin();
-    bool writeData(const char *filename, const char *data);
-    
+    bool writeData(const char *filename, const uint8_t *data, size_t length);
+
     bool appendData(const char *filename, const char *data);
 
     String readData(const char *filename);

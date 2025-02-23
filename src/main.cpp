@@ -5,14 +5,21 @@
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
-#include "Adafruit_FRAM_I2C.h"
-#include <Adafruit_EEPROM_I2C.h>
-#include <SPI.h>
+// #include <SPI.h>
+#include "Adafruit_FRAM_SPI.h"
+#include <Wire.h>
 
-// Create an instance of the Adafruit_FRAM_I2C class
-Adafruit_FRAM_I2C i2ceeprom = Adafruit_FRAM_I2C();
+uint8_t FRAM_CS = 5;
+uint8_t FRAM_SCK = 18;
+uint8_t FRAM_MISO = 19;
+uint8_t FRAM_MOSI = 23;
 
-TaskHandle_t Task1;
+Adafruit_FRAM_SPI fram =
+    Adafruit_FRAM_SPI(FRAM_SCK, FRAM_MISO, FRAM_MOSI, FRAM_CS);
+
+uint8_t addrSizeInBytes = 3; // Default to address size three bytes
+
+// TaskHandle_t Task1;
 
 #define CHUNK_SIZE 500 // Adjust based on your MTU can be 512 but might not be compatible on some crap
 #define BUTTON_PIN 12  // start ble server if true
@@ -21,8 +28,6 @@ TaskHandle_t Task1;
 const uint8_t tachoInput = 13;
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
-
-// String filePath = "/largefile.txt"; // File in LittleFS
 
 LittleFSHandler fsHandler; // Create an instance of the handler
 String gpsCoords;
@@ -55,25 +60,46 @@ bool loggerStarted = false;
 // Header at FRAM address 0
 struct FramLogHeader
 {
-    char fileName[22];
-    size_t dataLength;
+    char fileName[36];
+    u_int32_t dataLength;
 };
 
-static const size_t HEADER_ADDRESS = 0;
-static const size_t DATA_START = sizeof(FramLogHeader);
+struct LogRecord
+{
+    uint32_t timestamp;
+    float lat;
+    float lng;
+    uint8_t mph; // speed
+    uint16_t rpm;
+    uint8_t tps;     // throttle position sensor
+    uint8_t afr;    // lambda
+    uint8_t iPressure; // intake pressure
+    uint8_t airTemperature; // air temp
+    uint8_t coolantTemperature; // coolant temp
+    uint8_t bVoltage;     // battery voltage
+};
+
+static const size_t HEADER_ADDRESS = 0x00;
+static const uint32_t DATA_START = sizeof(FramLogHeader);
 
 FramLogHeader header;
 FramLogHeader header2;
-size_t currentDataAddress = DATA_START;
+LogRecord record;
+
+// FastLogEntry fastLogEntry;   // Create a FastLogEntry struct
+// SlowLogEntry slowLogEntry;   // Create a SlowLogEntry struct
+
+uint32_t currentDataAddress = DATA_START;
 
 // buffer stuff -------------------------------------------------------------------------
 String logBuffer = ""; // Buffer to hold GPS data
+uint32_t messageCount = 0;
 
-const int bufferSize = 1024;    // Buffer size
-const int flushInterval = 1000; // Flush buffer every second (1000 ms) 3000 before
+const size_t BUFFER_SIZE = 1024; // Buffer size
+const int flushInterval = 1000;  // Flush buffer every second (1000 ms) 3000 before
 unsigned long lastFlushTime = 0;
 
-String logId = "/ho2001202522:56.txt"; // temp name for debug, change back later, line 43
+String logId = "/ho2202202521:30.txt"; // temp name for debug, change back later, line 43
 
 // rpm stuff -------------------------------------------------------------------------
 unsigned long rpm = 0;
@@ -97,13 +123,14 @@ unsigned long previousLowPulseTimeStamp = 0;
 
 // logging times-----------------------------------------------------------------------
 unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
-unsigned long lastTempTime1 = 0;
+unsigned long previousMillis1 = 0;
+unsigned long previousMillis2 = 0;
 unsigned long lastTempTime2 = 0;
 
 unsigned long lastGpsLogTime = 0; // For tracking GPS logging
 unsigned long lastRpmLogTime = 0; // For tracking RPM logging
-const unsigned long temperatureLogInterval = 1000;
-const unsigned long tempLogInterval1 = 100;
+const unsigned long slowLogginginterval = 1250;
+const unsigned long fastLoggingInterval = 100;
 const unsigned long tempLogInterval2 = 100;
 
 const unsigned long gpsLogInterval = 100;
@@ -501,91 +528,39 @@ String detectVenue(float currentLatitude, float currentLongitude)
     }
 }
 
-// void logData()
-// {
-//     // Get the current time
-//     unsigned long currentTime = millis();
-
-//     // Check if the temperature logging interval has elapsed
-//     if (currentTime - lastTemperatureLogTime >= temperatureLogInterval)
-//     {
-//         // Log temperature data
-//         // logTemperature();
-//         lastTemperatureLogTime = currentTime; // Update last temperature log time
-//     }
-
-//     // Check if the GPS logging interval has elapsed
-//     if (currentTime - lastGpsLogTime >= gpsLogInterval)
-//     {
-//         // Log GPS data
-//         // logGpsData();
-//         lastGpsLogTime = currentTime; // Update last GPS log time
-//     }
-
-//     // Check if the RPM logging interval has elapsed
-//     if (currentTime - lastRpmLogTime >= rpmLogInterval)
-//     {
-//         // Log RPM data
-//         // logRpmData();
-//         lastRpmLogTime = currentTime; // Update last RPM log time
-//     }
-// }
-
 void setFramHeader(const char *name)
 {
     // Fill header with initial values
 
-    strncpy(header.fileName, name, sizeof(header.fileName) - 1);    // copy "name" to header.filename, the sizeof bit tells the function how many characters to copy? maybe
-    header.fileName[sizeof(header.fileName) - 1] = '\0';            // Ensure null-termination
-    header.dataLength = 0;                                          // length of the datalog not the header
-    i2ceeprom.writeObject(HEADER_ADDRESS, header);                  // starts at ;osition 0
-    currentDataAddress = DATA_START;                                // first time currentDataAddress set by length of the header
+    strncpy(header.fileName, name, sizeof(header.fileName) - 1); // copy "name" to header.filename, the sizeof bit tells the function how many characters to copy? maybe
+    header.fileName[sizeof(header.fileName) - 1] = '\0';         // Ensure null-termination
+    header.dataLength = 0;                                       // Start with zero data length
+
+    fram.writeEnable(true);
+    fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // starts at position 0, writes the header to FRAM
+    fram.writeEnable(false);
+
     Serial.println("Filename set, Logging started");
     Serial.println(header.fileName);
-    Serial.println(sizeof(header.fileName));
+    Serial.println(sizeof(header));
+
+    fram.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM);
+    Serial.println("This is the file name from fram");
+    Serial.println(header2.fileName);
 }
 
-// void flushBuffer(String data, size_t len)
-// {
-//    // Serial.println(data);
-//     i2ceeprom.writeObject(currentDataAddress, data); // Write the chunk at currentDataAddress
-//     logBuffer = "";                                  // Clear the buffer
-//     header.dataLength += len;                        // Update header info
-//     i2ceeprom.writeObject(HEADER_ADDRESS, header);   // Write the updated header to FRAM so it's valid if power is lost
-//     currentDataAddress += len;
-//     Serial.println("Buffer flushed");
-//     Serial.println(header.dataLength);
-// }
-
-    
-
-void flushBuffer(String data, size_t len)
+void flushRingToFram()
 {
-    uint8_t buffer[bufferSize];                                 // This buffer is required by the write function below
-    memcpy(buffer, data.c_str(), bufferSize);                   // Use c_str() to get the C-style string
-    logBuffer = "";                                             // Clear the buffer
-    i2ceeprom.write(currentDataAddress, buffer, bufferSize);    // Write the chunk at currentDataAddress  
-    header.dataLength += bufferSize;                            // Update header info
-    i2ceeprom.writeObject(HEADER_ADDRESS, header);              // Write the updated header to FRAM so it's valid if power is lost
-    currentDataAddress += bufferSize;
+    fram.writeEnable(true);
+    fram.write(currentDataAddress, (uint8_t *)&record, sizeof(record));
+    fram.writeEnable(false);
+    currentDataAddress += sizeof(record);
+    header.dataLength += sizeof(record);
+
+    fram.writeEnable(true);
+    fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // Update the header with the new data length
+    fram.writeEnable(false);
 }
-
-// void flushBufer()
-// {
-//     String data;
-
-//         data = logBuffer;
-
-//     if (fsHandler.appendData(logId.c_str(), data.c_str()))
-//     {
-
-//             logBuffer = ""; // Clear the buffer
-
-//         // digitalWrite(LED, HIGH);
-//         // vTaskDelay(5);
-//         // digitalWrite(LED, LOW);
-//     }
-// }
 
 // void Task1code(void *parameter) //------------------- core 1 ---------------------------------
 // {
@@ -601,16 +576,65 @@ void flushBuffer(String data, size_t len)
 
 //------------------ core 1 ----------------------------------------------------------------------
 
-//------------------- core 1 ----------------------------------------------------------------------
+LogRecord readRecord;
+void readAllStructs(const char *filename)
+{
+    File file = LittleFS.open(filename, FILE_READ);
+    if (!file)
+    {
+        Serial.println("Failed to open file for reading");
+        return;
+    }
+
+    while (true)
+    {
+        // Attempt to read one struct
+        size_t bytesRead = file.readBytes((char *)&readRecord, sizeof(readRecord));
+        if (bytesRead < sizeof(readRecord))
+        {
+            // either EOF or partial read
+            if (bytesRead > 0)
+            {
+                Serial.println("Warning: partial struct read, file may be truncated!");
+            }
+            break; // done reading
+        }
+
+        // Print or process the struct
+        Serial.print("=== Entry ===  ");
+        Serial.print("timestamp: ");
+        Serial.print(readRecord.timestamp);
+        Serial.print(", rpm: ");
+        Serial.print(readRecord.rpm);
+        Serial.print(", AFR: ");
+        Serial.print(readRecord.afr);
+        Serial.print(", lat: ");
+        Serial.print(readRecord.lat,6);
+        Serial.print(", lng: ");
+        Serial.print(readRecord.lng,6);
+        Serial.print(", mph: ");
+        Serial.print(readRecord.mph);
+        Serial.print(", iPressure: ");
+        Serial.print(readRecord.iPressure);
+        Serial.print(", tps: ");
+        Serial.println(readRecord.tps);
+        Serial.print(", airTemperature: ");
+        Serial.print(readRecord.airTemperature);
+        Serial.print(", coolantTemperature: ");
+        Serial.print(readRecord.coolantTemperature);
+        Serial.print(", bVoltage: ");
+        Serial.println(readRecord.bVoltage);
+        Serial.println();
+    }
+
+    file.close();
+}
 
 void setup()
 {
-    FramLogHeader header2;
-    char s2[2200]; // Specify the size of the array
+
     Serial.begin(115200);
     Serial2.begin(9600); // TX = GPIO 17 RX = 16
-
-
 
     //---------------------------------------- stuff----------------------------------------------------------------
 
@@ -623,8 +647,6 @@ void setup()
     //     &Task1,    /* Task handle. */
     //     1          /* Core where the task should run */
     // );
-
-    //---------------------------------------- stuff----------------------------------------------------------------
 
     //---------------------------------------- stuff----------------------------------------------------------------
 
@@ -665,67 +687,105 @@ void setup()
         return;
     }
     //-----------------------------------------------------------------------
-    if (i2ceeprom.begin(0x50))
-    { // you can stick the new i2c addr in here, e.g. begin(0x51);
-        Serial.println("Found I2C EEPROM");
+    while (!Serial)
+        delay(10); // will pause Zero, Leonardo, etc until serial console opens
+
+    if (fram.begin())
+    {
+        Serial.println("Found SPI FRAM");
     }
     else
     {
-        Serial.println("I2C EEPROM not identified ... check your connections?\r\n");
+        Serial.println("No SPI FRAM found ... check your connections\r\n");
         while (1)
-            delay(10);
+            ;
     }
-    i2ceeprom.readObject(0x00, header2);
-      
-        Serial.println("This is the file name");
-        Serial.println(header2.fileName);
-        Serial.println("This is the data length");
-        Serial.println(header2.dataLength);
+    fram.setAddressSize(addrSizeInBytes); // Set the address size for the FRAM chip, mucho importante!!
 
-     //  i2ceeprom.read(0x16, s2);
-    //    Serial.println("This is the data length");
-        Serial.println(s2[10000]);
+    fram.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM
+    Serial.println("This is the file name");
+    Serial.println(header2.fileName);
+    Serial.println("Data length");
+    Serial.println(header2.dataLength);
 
-        //-----------------------------------------------------------------------
-        // Paths for the old and new filenames
-        // String oldFilePath = "/2203202422:21.txt";
-        // String newFilePath = "/na2203202422:21.txt";
 
-        // Serial.println("here sir!");
+    if (!LittleFS.exists(header2.fileName))
+    {
+    static const size_t BUFFER_SIZE = 512;
+    uint8_t buffer2[BUFFER_SIZE]; // allocated on the stack
+    uint32_t address = DATA_START;
 
-        // // Check if the old file exists before renaming
-        // if (LittleFS.exists(oldFilePath))
-        // {
-        //     // Attempt to rename the file
-        //     if (LittleFS.rename(oldFilePath, newFilePath))
-        //     {
-        //         Serial.println("File renamed successfully");
-        //     }
-        //     else
-        //     {
-        //         Serial.println("Failed to rename file");
-        //     }
-        // }
-        // else
-        // {
-        //     Serial.println("Old file does not exist");
-        // }
-        // na1410202420:30.txt
+    // 3) Loop in chunks until we've written all data
+    size_t bytesLeft = header2.dataLength;
+    while (bytesLeft > 0)
+    {
+        // Decide how many bytes to read this iteration
+        size_t toRead = (bytesLeft < BUFFER_SIZE) ? bytesLeft : BUFFER_SIZE;
 
-        //-----------------------------------------------------------------------
-        String filePath = "/wo1001202519:06.txt"; // File to delete
-        // Check if the file exists before trying to remove it
-        if (LittleFS.exists(filePath))
+        // Read that chunk from FRAM
+        fram.read(address, buffer2, toRead);
+
+        // Write the chunk to the file
+        fsHandler.writeData(header2.fileName, buffer2, toRead);
+
+        // Update pointers/counters
+        address += toRead;
+        bytesLeft -= toRead;
+    }
+
+    file.close();
+    Serial.print("Wrote ");
+    Serial.print(header2.dataLength);
+    Serial.print(" bytes to ");
+    Serial.println(header2.fileName);
+    }
+    else
+    {
+        Serial.println("File already exists");
+    }
+    String tempFileList = fsHandler.listFiles();
+    Serial.println(tempFileList);
+
+    //-----------------------------------------------------------------------
+    // Paths for the old and new filenames
+    // String oldFilePath = "/2203202422:21.txt";
+    // String newFilePath = "/na2203202422:21.txt";
+
+    // Serial.println("here sir!");
+
+    // // Check if the old file exists before renaming
+    // if (LittleFS.exists(oldFilePath))
+    // {
+    //     // Attempt to rename the file
+    //     if (LittleFS.rename(oldFilePath, newFilePath))
+    //     {
+    //         Serial.println("File renamed successfully");
+    //     }
+    //     else
+    //     {
+    //         Serial.println("Failed to rename file");
+    //     }
+    // }
+    // else
+    // {
+    //     Serial.println("Old file does not exist");
+    // }
+    // na1410202420:30.txt
+
+    //-----------------------------------------------------------------------
+    String filePath = "/ho2202202521:26.txt"; // File to delete
+    // Check if the file exists before trying to remove it
+    if (LittleFS.exists(filePath))
+    {
+        // Remove the file
+        if (LittleFS.remove(filePath))
         {
-            // Remove the file
-            if (LittleFS.remove(filePath))
-            {
-                Serial.println("File deleted successfully");
-            }
-            else
-            {
-                Serial.println("Failed to delete file");
-            }
+            Serial.println("File deleted successfully");
+        }
+        else
+        {
+            Serial.println("Failed to delete file");
+        }
     }
     else
     {
@@ -741,8 +801,8 @@ void setup()
     // }
 
     // Read data from a file
-    // String fileData = fsHandler.readData("/22:10.txt");
-    // Serial.println("File Data: " + fileData);
+    // String fileData = fsHandler.readData("/ho2601202509:00.txt");
+    // Serial.println("Little FS File Data: " + fileData);
 
     // fileSize = fsHandler.getFileSize("/data2.txt"); // get the file size
 
@@ -848,6 +908,7 @@ void loop()
 
             logId = "/" + String(venue) + String(formattedDay) + String(formattedmonth) + String(year) + String(formattedHour) + ":" + String(formattedMin) + ".txt"; // assemble a file name from the gps time
         }
+    
         //---------------------------------------------------------------------------------------------
 
         if (gps.location.isUpdated())
@@ -860,118 +921,43 @@ void loop()
                 String gpsData = "G," + String(currentLat, 6) + "," + String(currentLng, 6) + "," + String(mph, 1) + "," + String(currentTime) + ",";
 
                 logBuffer += gpsData;
-
-                // Check if the buffer needs to be flushed
-                // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-                // {
-                //     flushBuffer(logBuffer);
-                // }
-
-                // if (fsHandler.appendData(logId.c_str(), gpsData.c_str()))
-                // {
-                // //    Serial.println("GPS data written to " + logId);
-                // }
-            }
-        }
-
-        // Temperature Data
-        if (millis() - lastTemperatureLogTime >= temperatureLogInterval && gps.location.isUpdated())
-        {
-            lastTemperatureLogTime = millis();
-            float temperature = 65;                                                             // readTemperature();   // later....
-            String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
-
-            logBuffer += engTempData;
-
-            // Check if the buffer needs to be flushed
-            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            // {
-            //     flushBuffer(logBuffer);
-            // }
-
-            // if (fsHandler.appendData(logId.c_str(), tempData.c_str()))
-            // {
-            //    // Serial.println("Temperature data written to " + logId);
-            // }
-        }
-
-        // Rpm Data
-        if (millis() - lastRpmLogTime >= rpmLogInterval && gps.location.isUpdated())
-
-        {
-            lastRpmLogTime = millis();
-            // readTemperature();   // later....
-
-            String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
-
-            logBuffer += rpmData;
-
-            // Check if the buffer needs to be flushed
-            // if (logBuffer.length() >= bufferSize || millis() - lastFlushTime >= flushInterval)
-            // {
-            //     flushBuffer(logBuffer);
-            // }
-            // if (fsHandler.appendData(logId.c_str(), rpmData.c_str()))
-            // {
-            //   //  Serial.println("RPM data written to " + logId);
-            // }
-        }
-    }
-
-    //-------------------------- TEST STUFF --------------------------------------------------------
-
-    if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
-    {
-        Serial.println("Logging Button Pressed");
-        loggerStarted = true; // Set the flag to prevent re-calling the function
-        setFramHeader(logId.c_str());
-    }
-
-    if (loggerStarted)
-    {
-
-        //  Temperature Data
-        if (millis() - lastTemperatureLogTime >= temperatureLogInterval)
-        {
-            lastTemperatureLogTime = millis();
-            float temperature = 65;                                                             // readTemperature();   // later....
-            String engTempData = "ET," + String(temperature, 2) + "," + String(millis()) + ","; // Append current time
-
-            logBuffer += engTempData;
-            if (logBuffer.length() >= bufferSize)
-            {
-                flushBuffer(logBuffer, logBuffer.length());
-            }
-        }
-
-        //------------------------------------------------------------------------
-
-        if (millis() - lastTempTime1 >= tempLogInterval1)
-        {
-            lastTempTime1 = millis();
-            float rpm = 1165;                                                   // readTemperature();   // later....
-            String rpmData = "R," + String(rpm) + "," + String(millis()) + ","; // Append current time
-
-            logBuffer += rpmData;
-            if (logBuffer.length() >= bufferSize)
-            {
-                flushBuffer(logBuffer, logBuffer.length());
-            }
-        }
-        //------------------------------------------------------------------------
-
-        if (millis() - lastTempTime2 >= tempLogInterval2)
-        {
-            lastTempTime2 = millis();
-            float psi = 123;                                                    // readTemperature();   // later....
-            String psiData = "P," + String(psi) + "," + String(millis()) + ","; // Append current time
-
-            logBuffer += psiData;
-            if (logBuffer.length() >= bufferSize)
-            {
-                flushBuffer(logBuffer, logBuffer.length());
             }
         }
     }
-    //------------------------------------------------------------------------
-}
+            //-------------------------- TEST STUFF --------------------------------------------------------
+
+            if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
+            {
+                Serial.println("Logging Button Pressed");
+                loggerStarted = true; // Set the flag to prevent re-calling the function
+                setFramHeader(logId.c_str());
+            }
+
+            if (loggerStarted)
+            {
+
+                // fast loop for testing
+                if (millis() - previousMillis2 >= fastLoggingInterval)
+                {
+                    previousMillis2 = millis();
+                    record.timestamp = previousMillis2;
+                    // record.lat = currentLat;
+                    // record.lng = currentLng;
+                    record.lat = 53.310269;
+                    record.lng = -2.460925;
+                    record.afr = 13.01;
+                    record.rpm = 12500;
+                    record.iPressure = 2.01;
+                    record.mph = 123;
+                    record.tps = 45;
+                    record.airTemperature = 23;
+                    record.coolantTemperature = 24;
+                    record.bVoltage = 12.5;
+
+                    flushRingToFram();
+                }
+            }
+        }
+    
+
+

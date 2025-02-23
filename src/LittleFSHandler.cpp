@@ -15,20 +15,28 @@ bool LittleFSHandler::begin()
 }
 //------------------------------------------------------------------------------------------------
 
-// Write data to a file
-bool LittleFSHandler::writeData(const char *filename, const char *data)
+bool LittleFSHandler::writeData(const char *filename, const uint8_t *data, size_t length)
 {
-    File file = LittleFS.open(filename, FILE_WRITE, true);
+    File file = LittleFS.open(filename, FILE_APPEND);   // changed to FILE_APPEND was FILE_WRITE
     if (!file)
     {
         Serial.println("Failed to open file for writing");
         return false;
     }
 
-    file.print(data); // Write data to the file
-    file.close();
-    Serial.println("Data written successfully");
-    return true;
+    size_t written = file.write(data, length); // Write exactly 'length' bytes
+    //file.close();
+
+    if (written == length)
+    {
+        Serial.println("Data written successfully");
+        return true;
+    }
+    else
+    {
+        Serial.println("Failed to write all data");
+        return false;
+    }
 }
 
 bool LittleFSHandler::appendData(const char *filename, const char *data)
@@ -98,10 +106,6 @@ String LittleFSHandler::listFiles()
     JsonDocument doc;
     JsonArray filesArray = doc["files"].to<JsonArray>();
 
-    // JsonArray filesArray = doc.createNestedArray("files"); // Create a JSON array to store all file details
-    //   JsonObject obj = doc.to<JsonObject>();
-    // JsonObject fileObj = doc.to<JsonObject>();
-
     File root = LittleFS.open("/"); // Open the root directory
     if (!root || !root.isDirectory())
     {
@@ -156,7 +160,6 @@ String LittleFSHandler::listFiles()
         fileObj["fileSize"] = fileSize;
         fileObj["fastestLap"] = fastestLap;
         fileObj["fileName"] = temp;
-
 
         Serial.print("File: ");
         Serial.println(file.name());

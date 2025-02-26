@@ -21,7 +21,7 @@ uint8_t addrSizeInBytes = 3; // Default to address size three bytes
 
 // TaskHandle_t Task1;
 
-#define CHUNK_SIZE 500 // Adjust based on your MTU can be 512 but might not be compatible on some crap
+#define CHUNK_SIZE 480 // Adjust based on your MTU can be 512 but might not be compatible on some crap
 #define BUTTON_PIN 12  // start ble server if true
 #define START_LOGGING_PIN 15
 #define LED 23
@@ -38,7 +38,7 @@ static NimBLECharacteristic *pDeleteFileCharacteristic;
 bool isSending = false;
 bool fileNameSet = false;
 File file;
-char buffer[CHUNK_SIZE];
+char buffer[480]; 
 int bytesRead = 0;
 bool acknowledgmentReceived = true;
 size_t currentFilePosition = 0; // Track the current position in the file
@@ -99,7 +99,7 @@ const size_t BUFFER_SIZE = 1024; // Buffer size
 const int flushInterval = 1000;  // Flush buffer every second (1000 ms) 3000 before
 unsigned long lastFlushTime = 0;
 
-String logId = "/ho2202202521:30.txt"; // temp name for debug, change back later, line 43
+String logId = "/ho2502202520:46.txt"; // temp name for debug, change back later, line 43
 
 // rpm stuff -------------------------------------------------------------------------
 unsigned long rpm = 0;
@@ -190,7 +190,7 @@ void sendFileDetails(NimBLECharacteristic *pCharacteristic)
 {
     String fileListJson = fsHandler.listFiles();
 
-    const size_t chunkSize = 500; // MTU size is it? or just the chunk size? seem to work set at 500, was 512 = corrupted data..
+    const size_t chunkSize = 512; // MTU size is it? or just the chunk size? seem to work set at 500, was 512 = corrupted data..
     size_t length = fileListJson.length();
     Serial.print("Complete length of Json doc: ");
     Serial.println(length);
@@ -242,10 +242,6 @@ void sendChunk(NimBLECharacteristic *pCharacteristic, File file)
     totalBytesSent += bytesRead;
     Serial.print("Total bytes sent so far: ");
     Serial.println(totalBytesSent);
-    // Serial.print("File size : ");
-    // Serial.println(fileSize);
-
-    // Serial.println(buffer);
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks
@@ -277,7 +273,7 @@ class DownloadFileCallback : public NimBLECharacteristicCallbacks
             fileName = pCharacteristic->getValue();
             fileName = "/" + fileName;
             fileNameSet = true;
-            Serial.println("This is the file name sent " + String(fileName.c_str()));
+            Serial.println("This is the file name sent from the app " + String(fileName.c_str()));
         }
 
         //   Serial.println("onWrite called");
@@ -357,16 +353,11 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
 {
     void onWrite(NimBLECharacteristic *pCharacteristic)
     {
-        //   Serial.println("onWrite called");
-        //   Serial.print("Client wrote to characteristic UUID: ");
-        //   Serial.println(pCharacteristic->getUUID().toString().c_str());
 
         std::string uuidStr = pCharacteristic->getUUID().toString();
         uuidStr.erase(0, uuidStr.find_first_not_of(" \t\n\r\f\v"));
         uuidStr.erase(uuidStr.find_last_not_of(" \t\n\r\f\v") + 1);
 
-        // Serial.print("Trimmed UUID: ");
-        // Serial.println(uuidStr.c_str());
 
         if (uuidStr == "f00d" || uuidStr == "0xf00d" || uuidStr == "0000f00d-0000-1000-8000-00805f9b34fb")
         {
@@ -577,6 +568,7 @@ void flushRingToFram()
 //------------------ core 1 ----------------------------------------------------------------------
 
 LogRecord readRecord;
+
 void readAllStructs(const char *filename)
 {
     File file = LittleFS.open(filename, FILE_READ);
@@ -601,30 +593,30 @@ void readAllStructs(const char *filename)
         }
 
         // Print or process the struct
-        Serial.print("=== Entry ===  ");
-        Serial.print("timestamp: ");
-        Serial.print(readRecord.timestamp);
-        Serial.print(", rpm: ");
-        Serial.print(readRecord.rpm);
-        Serial.print(", AFR: ");
-        Serial.print(readRecord.afr);
-        Serial.print(", lat: ");
-        Serial.print(readRecord.lat,6);
-        Serial.print(", lng: ");
-        Serial.print(readRecord.lng,6);
-        Serial.print(", mph: ");
-        Serial.print(readRecord.mph);
-        Serial.print(", iPressure: ");
-        Serial.print(readRecord.iPressure);
-        Serial.print(", tps: ");
-        Serial.println(readRecord.tps);
-        Serial.print(", airTemperature: ");
-        Serial.print(readRecord.airTemperature);
-        Serial.print(", coolantTemperature: ");
-        Serial.print(readRecord.coolantTemperature);
-        Serial.print(", bVoltage: ");
-        Serial.println(readRecord.bVoltage);
-        Serial.println();
+        // Serial.print("=== Entry ===  ");
+        // Serial.print("timestamp: ");
+        Serial.println(readRecord.timestamp);
+        // Serial.print(", rpm: ");
+        // Serial.print(readRecord.rpm);
+        // Serial.print(", AFR: ");
+        // Serial.print(readRecord.afr);
+        // Serial.print(", lat: ");
+        // Serial.print(readRecord.lat,6);
+        // Serial.print(", lng: ");
+        // Serial.print(readRecord.lng,6);
+        // Serial.print(", mph: ");
+        // Serial.print(readRecord.mph);
+        // Serial.print(", iPressure: ");
+        // Serial.print(readRecord.iPressure);
+        // Serial.print(", tps: ");
+        // Serial.println(readRecord.tps);
+        // Serial.print(", airTemperature: ");
+        // Serial.print(readRecord.airTemperature);
+        // Serial.print(", coolantTemperature: ");
+        // Serial.print(readRecord.coolantTemperature);
+        // Serial.print(", bVoltage: ");
+        // Serial.println(readRecord.bVoltage);
+        // Serial.println();
     }
 
     file.close();
@@ -825,6 +817,34 @@ void setup()
     {
         Serial.println("Condition not met, waiting to start BLE server...");
     }
+    Serial.print("sizeof(LogRecord) = ");
+    Serial.println(sizeof(LogRecord));
+
+   Serial.print("offset of timestamp = ");
+    Serial.print(offsetof(LogRecord, timestamp));
+    // Serial.print("offset of lat = ");
+    // Serial.println(offsetof(LogRecord, lat));
+    // Serial.print("offset of lng = ");
+    // Serial.println(offsetof(LogRecord, lng));
+    // Serial.print("offset of mph = ");
+    // Serial.println(offsetof(LogRecord, mph));
+    // Serial.print("offset of rpm = ");
+    // Serial.println(offsetof(LogRecord, rpm));
+    // Serial.print("offset of tps = ");
+    // Serial.println(offsetof(LogRecord, tps));
+    // Serial.print("offset of afr = ");
+    // Serial.println(offsetof(LogRecord, afr));
+    // Serial.print("offset of iPressure = ");
+    // Serial.println(offsetof(LogRecord, iPressure));
+    // Serial.print("offset of airTemperature = ");
+    // Serial.println(offsetof(LogRecord, airTemperature));
+    // Serial.print("offset of coolantTemperature = ");
+    // Serial.println(offsetof(LogRecord, coolantTemperature));
+    // Serial.print("offset of bVoltage = ");
+    // Serial.println(offsetof(LogRecord, bVoltage));
+
+    // readAllStructs("/ho2502202520:46.txt");
+     
 }
 
 void loop()
@@ -941,8 +961,7 @@ void loop()
                 {
                     previousMillis2 = millis();
                     record.timestamp = previousMillis2;
-                    // record.lat = currentLat;
-                    // record.lng = currentLng;
+                   // record.timestamp = 1000;
                     record.lat = 53.310269;
                     record.lng = -2.460925;
                     record.afr = 13.01;

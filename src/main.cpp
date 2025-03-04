@@ -5,7 +5,6 @@
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
-// #include <SPI.h>
 #include "Adafruit_FRAM_SPI.h"
 #include <Wire.h>
 
@@ -21,10 +20,10 @@ uint8_t addrSizeInBytes = 3; // Default to address size three bytes
 
 // TaskHandle_t Task1;
 
-#define CHUNK_SIZE 480 // Adjust based on your MTU can be 512 but might not be compatible on some crap
+#define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
 #define BUTTON_PIN 12  // start ble server if true
 #define START_LOGGING_PIN 15
-#define LED 23
+#define LED 22
 const uint8_t tachoInput = 13;
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
@@ -38,7 +37,7 @@ static NimBLECharacteristic *pDeleteFileCharacteristic;
 bool isSending = false;
 bool fileNameSet = false;
 File file;
-char buffer[480]; 
+char buffer[512];//was 480
 int bytesRead = 0;
 bool acknowledgmentReceived = true;
 size_t currentFilePosition = 0; // Track the current position in the file
@@ -69,14 +68,16 @@ struct LogRecord
     uint32_t timestamp;
     float lat;
     float lng;
-    uint8_t mph; // speed
+    uint16_t mph; // speed x 10
     uint16_t rpm;
-    uint8_t tps;     // throttle position sensor
-    uint8_t afr;    // lambda
-    uint8_t iPressure; // intake pressure
-    uint8_t airTemperature; // air temp
+    uint8_t tps;                // throttle position sensor
+    uint8_t afr;                // lambda x 10
+    uint8_t iPressure;          // intake pressure use MPX5100DP, 0-14.5PSI OR 0 TO 100KPA Tranmit in KPA
+    uint8_t airTemperature;     // air temp
     uint8_t coolantTemperature; // coolant temp
-    uint8_t bVoltage;     // battery voltage
+    uint8_t oilPressure;        //  oil pressure
+    uint8_t bVoltage;           // battery voltage x 10
+    uint8_t spare;              // spare
 };
 
 static const size_t HEADER_ADDRESS = 0x00;
@@ -92,14 +93,8 @@ LogRecord record;
 uint32_t currentDataAddress = DATA_START;
 
 // buffer stuff -------------------------------------------------------------------------
-String logBuffer = ""; // Buffer to hold GPS data
-uint32_t messageCount = 0;
 
-const size_t BUFFER_SIZE = 1024; // Buffer size
-const int flushInterval = 1000;  // Flush buffer every second (1000 ms) 3000 before
-unsigned long lastFlushTime = 0;
-
-String logId = "/ho2502202520:46.txt"; // temp name for debug, change back later, line 43
+String logId = "";
 
 // rpm stuff -------------------------------------------------------------------------
 unsigned long rpm = 0;
@@ -107,7 +102,7 @@ hw_timer_t *timer0 = NULL;             // Declare a pointer to a hardware timer 
 unsigned long minValidPulseLength = 1; // Adjust as needed (in millis)
 unsigned long lastPulseTime;
 unsigned long rotation = 0;
-int rpmMultiplier = 1;          // temp hard coded
+int rpmMultiplier = 4;          // temp hard coded
 int DEFAULT_RPM_MULTIPLIER = 2; // not used yet in logger app, set ig app gui eventually
 
 unsigned long startLowPulseTimer;
@@ -163,26 +158,28 @@ const char UBLOX_INIT[] PROGMEM = {
 };
 
 //-----------------------------------------------------------------------------------------------------
-// void IRAM_ATTR
-// pulseChange()
+//                                  tacho stuff
+//-----------------------------------------------------------------------------------------------------
+void IRAM_ATTR
+pulseChange()
 
-// {
-//     unsigned long currentMicros = micros();
+{
+    unsigned long currentMicros = micros();
 
-//     // Debounce the input signal
-//     if (currentMicros - lastPulseTime > minValidPulseLength)
-//     {
-//         rotation++;                    // Increment pulse count
-//         lastPulseTime = currentMicros; // Update last pulse time
-//     }
-// }
+    // Debounce the input signal
+    if (currentMicros - lastPulseTime > minValidPulseLength)
+    {
+        rotation++;                    // Increment pulse count
+        lastPulseTime = currentMicros; // Update last pulse time
+    }
+}
 
-// void IRAM_ATTR rpmTimer()
-// {
-//     rpm = (rotation * 60) * rpmMultiplier; // eg rpmMultiplier = 2,  means 1 pulse per rotation, Steelie, wasted spark
-//     rotation = 0;
-//     //  Serial.println(rpm); //
-// } // something with a cam sensor will be 1 pulse every 2 rotations, so multiplier will be 4
+void IRAM_ATTR rpmTimer()
+{
+    rpm = (rotation * 60) * rpmMultiplier; // eg rpmMultiplier = 2,  means 1 pulse per rotation, Steelie, wasted spark
+    rotation = 0;                          //
+
+} // something with a cam sensor will be 1 pulse every 2 rotations, so multiplier will be 4
 
 //-----------------------------------------------------------------------------
 
@@ -190,7 +187,7 @@ void sendFileDetails(NimBLECharacteristic *pCharacteristic)
 {
     String fileListJson = fsHandler.listFiles();
 
-    const size_t chunkSize = 512; // MTU size is it? or just the chunk size? seem to work set at 500, was 512 = corrupted data..
+    const size_t chunkSize = 500; // MTU size is it? or just the chunk size? seem to work set at 500, was 512 = corrupted data..
     size_t length = fileListJson.length();
     Serial.print("Complete length of Json doc: ");
     Serial.println(length);
@@ -358,7 +355,6 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
         uuidStr.erase(0, uuidStr.find_first_not_of(" \t\n\r\f\v"));
         uuidStr.erase(uuidStr.find_last_not_of(" \t\n\r\f\v") + 1);
 
-
         if (uuidStr == "f00d" || uuidStr == "0xf00d" || uuidStr == "0000f00d-0000-1000-8000-00805f9b34fb")
         {
             //   Serial.println("Correct characteristic UUID");
@@ -367,32 +363,10 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
             Serial.println(value.c_str());
 
             if (value == "SEND_FILE_DETAILS")
-            //   if (value == "GET_LARGE_FILE")
+           
             {
                 sendFileDetails(pCharacteristic);
             }
-
-            // if (value == "GET_LARGE_FILE" && !isSending)
-            // {
-            //     Serial.println("GET_LARGE_FILE request received");
-            //     file = fsHandler.openFile(fileName); // Open the file once
-
-            //     if (!file)
-            //     {
-            //         Serial.println("Failed to open file after GET_LARGE_FILE command recognised");
-            //         return;
-            //     }
-
-            //     //   Serial.println("File opened successfully. Starting transfer...");
-            //     isSending = true;
-            //     sendChunk(pCharacteristic, file); // Start sending the first chunk
-            // }
-            // else if (value == "NEXT_CHUNK" && isSending)
-            // {
-            //     // Send the next chunk of the file
-            //     //    Serial.println("NEXT_CHUNK request received");
-            //     sendChunk(pCharacteristic, file);
-            // }
         }
     }
 };
@@ -509,7 +483,7 @@ String detectVenue(float currentLatitude, float currentLongitude)
     if (distance <= tolerance)
     {
         // Trigger lap completion logic
-        Serial.println("Work");
+        Serial.println("Work...");
         return "wo";
     }
     else
@@ -594,29 +568,33 @@ void readAllStructs(const char *filename)
 
         // Print or process the struct
         // Serial.print("=== Entry ===  ");
-        // Serial.print("timestamp: ");
+        Serial.print("timestamp: ");
         Serial.println(readRecord.timestamp);
-        // Serial.print(", rpm: ");
-        // Serial.print(readRecord.rpm);
-        // Serial.print(", AFR: ");
-        // Serial.print(readRecord.afr);
-        // Serial.print(", lat: ");
-        // Serial.print(readRecord.lat,6);
-        // Serial.print(", lng: ");
-        // Serial.print(readRecord.lng,6);
-        // Serial.print(", mph: ");
-        // Serial.print(readRecord.mph);
-        // Serial.print(", iPressure: ");
-        // Serial.print(readRecord.iPressure);
-        // Serial.print(", tps: ");
-        // Serial.println(readRecord.tps);
-        // Serial.print(", airTemperature: ");
-        // Serial.print(readRecord.airTemperature);
-        // Serial.print(", coolantTemperature: ");
-        // Serial.print(readRecord.coolantTemperature);
-        // Serial.print(", bVoltage: ");
-        // Serial.println(readRecord.bVoltage);
-        // Serial.println();
+        Serial.print(", lat: ");
+        Serial.print(readRecord.lat, 6);
+        Serial.print(", lng: ");
+        Serial.print(readRecord.lng, 6);
+        Serial.print(", mph: ");
+        Serial.print(readRecord.mph/10.0);
+        Serial.print(", rpm: ");
+        Serial.print(readRecord.rpm);
+        Serial.print(", tps: ");
+        Serial.println(readRecord.tps);
+        Serial.print(", AFR: ");
+        Serial.print(readRecord.afr);
+        Serial.print(", iPressure: ");
+        Serial.print(readRecord.iPressure);
+        Serial.print(", airTemperature: ");
+        Serial.print(readRecord.airTemperature);
+        Serial.print(", coolantTemperature: ");
+        Serial.print(readRecord.coolantTemperature);
+        Serial.print(", oilPressure: ");
+        Serial.print(readRecord.oilPressure);
+        Serial.print(", bVoltage: ");
+        Serial.println(readRecord.bVoltage);
+        Serial.print(", spare: ");
+        Serial.println(readRecord.spare);
+        Serial.println();
     }
 
     file.close();
@@ -649,12 +627,12 @@ void setup()
 
     //---------------------------------------- stuff----------------------------------------------------------------
 
-    // timer0 = timerBegin(0, 80, true);              // Timer 0, prescaler of 80, count up
-    // timerAttachInterrupt(timer0, &flushBuffer, true); // Attach rpmTimer function to the timer
-    // timerAlarmWrite(timer0, 10000000, true);         // Set alarm to call rpmTimer function every quarter second
-    // timerAlarmEnable(timer0);                      // Enable the timer alarm
+    timer0 = timerBegin(0, 80, true);              // Timer 0, prescaler of 80, count up
+    timerAttachInterrupt(timer0, &rpmTimer, true); // Attach rpmTimer function to the timer
+    timerAlarmWrite(timer0, 250000, true);         // Set alarm to call rpmTimer function every quarter second
+    timerAlarmEnable(timer0);                      // Enable the timer alarm
 
-    // attachInterrupt(tachoInput, pulseChange, CHANGE); // Attach interrupt to the sensor pin
+    attachInterrupt(tachoInput, pulseChange, CHANGE); // Attach interrupt to the sensor pin
 
     //--------------------------------------------------------------------------------------------------------
 
@@ -695,48 +673,48 @@ void setup()
     fram.setAddressSize(addrSizeInBytes); // Set the address size for the FRAM chip, mucho importante!!
 
     fram.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM
-    Serial.println("This is the file name");
+    Serial.println("This is the file name about to be saved to LittleFS");
     Serial.println(header2.fileName);
     Serial.println("Data length");
     Serial.println(header2.dataLength);
 
-
     if (!LittleFS.exists(header2.fileName))
     {
-    static const size_t BUFFER_SIZE = 512;
-    uint8_t buffer2[BUFFER_SIZE]; // allocated on the stack
-    uint32_t address = DATA_START;
+        static const size_t BUFFER_SIZE = 512;
+        uint8_t buffer2[BUFFER_SIZE]; // allocated on the stack
+        uint32_t address = DATA_START;
 
-    // 3) Loop in chunks until we've written all data
-    size_t bytesLeft = header2.dataLength;
-    while (bytesLeft > 0)
-    {
-        // Decide how many bytes to read this iteration
-        size_t toRead = (bytesLeft < BUFFER_SIZE) ? bytesLeft : BUFFER_SIZE;
+        // 3) Loop in chunks until we've written all data
+        size_t bytesLeft = header2.dataLength;
+        while (bytesLeft > 0)
+        {
+            // Decide how many bytes to read this iteration
+            size_t toRead = (bytesLeft < BUFFER_SIZE) ? bytesLeft : BUFFER_SIZE;
 
-        // Read that chunk from FRAM
-        fram.read(address, buffer2, toRead);
+            // Read that chunk from FRAM
+            fram.read(address, buffer2, toRead);
 
-        // Write the chunk to the file
-        fsHandler.writeData(header2.fileName, buffer2, toRead);
+            // Write the chunk to the file
+            fsHandler.writeData(header2.fileName, buffer2, toRead);
 
-        // Update pointers/counters
-        address += toRead;
-        bytesLeft -= toRead;
-    }
+            // Update pointers/counters
+            address += toRead;
+            bytesLeft -= toRead;
+        }
 
-    file.close();
-    Serial.print("Wrote ");
-    Serial.print(header2.dataLength);
-    Serial.print(" bytes to ");
-    Serial.println(header2.fileName);
+        file.close();
+        Serial.print("Wrote ");
+        Serial.print(header2.dataLength);
+        Serial.print(" bytes to ");
+        Serial.println(header2.fileName);
     }
     else
     {
-        Serial.println("File already exists");
+        Serial.println("File already exists so no need to write to LittleFS");
     }
     String tempFileList = fsHandler.listFiles();
     Serial.println(tempFileList);
+    delay(1000);
 
     //-----------------------------------------------------------------------
     // Paths for the old and new filenames
@@ -765,7 +743,7 @@ void setup()
     // na1410202420:30.txt
 
     //-----------------------------------------------------------------------
-    String filePath = "/ho2202202521:26.txt"; // File to delete
+    String filePath = "/na0103202522:15.txt"; // File to delete
     // Check if the file exists before trying to remove it
     if (LittleFS.exists(filePath))
     {
@@ -804,8 +782,9 @@ void setup()
     // Initialize the button pin
     pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
-    pinMode(tachoInput, INPUT);
+    pinMode(tachoInput, INPUT_PULLUP);
     pinMode(LED, OUTPUT);
+    //  digitalWrite(LED, HIGH);
 
     // Initial check in setup to see if BLE server should start right away
     if (checkServerStartCondition())
@@ -820,31 +799,36 @@ void setup()
     Serial.print("sizeof(LogRecord) = ");
     Serial.println(sizeof(LogRecord));
 
-   Serial.print("offset of timestamp = ");
-    Serial.print(offsetof(LogRecord, timestamp));
-    // Serial.print("offset of lat = ");
-    // Serial.println(offsetof(LogRecord, lat));
-    // Serial.print("offset of lng = ");
-    // Serial.println(offsetof(LogRecord, lng));
-    // Serial.print("offset of mph = ");
-    // Serial.println(offsetof(LogRecord, mph));
-    // Serial.print("offset of rpm = ");
-    // Serial.println(offsetof(LogRecord, rpm));
-    // Serial.print("offset of tps = ");
-    // Serial.println(offsetof(LogRecord, tps));
-    // Serial.print("offset of afr = ");
-    // Serial.println(offsetof(LogRecord, afr));
-    // Serial.print("offset of iPressure = ");
-    // Serial.println(offsetof(LogRecord, iPressure));
-    // Serial.print("offset of airTemperature = ");
-    // Serial.println(offsetof(LogRecord, airTemperature));
-    // Serial.print("offset of coolantTemperature = ");
-    // Serial.println(offsetof(LogRecord, coolantTemperature));
-    // Serial.print("offset of bVoltage = ");
-    // Serial.println(offsetof(LogRecord, bVoltage));
+    //  used to check the offset of each struct element
 
-    // readAllStructs("/ho2502202520:46.txt");
-     
+    //   Serial.print("offset of timestamp = ");
+    //    Serial.print(offsetof(LogRecord, timestamp));
+    //     Serial.print("offset of lat = ");
+    //     Serial.println(offsetof(LogRecord, lat));
+    //     Serial.print("offset of lng = ");
+    //     Serial.println(offsetof(LogRecord, lng));
+    //     Serial.print("offset of mph = ");
+    //     Serial.println(offsetof(LogRecord, mph));
+    //     Serial.print("offset of rpm = ");
+    //     Serial.println(offsetof(LogRecord, rpm));
+    //     Serial.print("offset of tps = ");
+    //     Serial.println(offsetof(LogRecord, tps));
+    //     Serial.print("offset of afr = ");
+    //     Serial.println(offsetof(LogRecord, afr));
+    //     Serial.print("offset of iPressure = ");
+    //     Serial.println(offsetof(LogRecord, iPressure));
+    //     Serial.print("offset of airTemperature = ");
+    //     Serial.println(offsetof(LogRecord, airTemperature));
+    //     Serial.print("offset of coolantTemperature = ");
+    //     Serial.println(offsetof(LogRecord, coolantTemperature));
+    //     Serial.print("offset of oilPressure = ");
+    //     Serial.println(offsetof(LogRecord, oilPressure));
+    //     Serial.print("offset of bVoltage = ");
+    //     Serial.println(offsetof(LogRecord, bVoltage));
+    //     Serial.print("offset of spare = ");
+    //     Serial.println(offsetof(LogRecord, spare));
+
+//    readAllStructs("/na0103202522:15.txt");
 }
 
 void loop()
@@ -873,6 +857,8 @@ void loop()
         double currentLat = gps.location.lat();
         double currentLng = gps.location.lng();
         float mph = gps.speed.mph();
+        u_int16_t mphInt = mph * 10;
+    
 
         gps.encode(Serial2.read());
 
@@ -927,56 +913,77 @@ void loop()
             }
 
             logId = "/" + String(venue) + String(formattedDay) + String(formattedmonth) + String(year) + String(formattedHour) + ":" + String(formattedMin) + ".txt"; // assemble a file name from the gps time
+            Serial.print("First print of logID = ");
+            Serial.println(logId);
         }
-    
+
         //---------------------------------------------------------------------------------------------
 
-        if (gps.location.isUpdated())
+        // if (!loggerStarted && (gps.location.isUpdated()) && (millis() % 1000 == 0))
+        if (!loggerStarted && (gps.location.isUpdated()))
         {
-            unsigned long currentTime = millis();
-
-            if (currentTime - lastGpsLogTime >= gpsLogInterval)
             {
-                lastGpsLogTime = currentTime;
-                String gpsData = "G," + String(currentLat, 6) + "," + String(currentLng, 6) + "," + String(mph, 1) + "," + String(currentTime) + ",";
+                Serial.println("Logging started");
+                loggerStarted = true; // Set the flag to prevent re-calling the function
+                setFramHeader(logId.c_str());
+                Serial.println(logId);
+                digitalWrite(LED, HIGH);
+            }
+        }
+        //---------------------------------------------------------------------------------------------
+        if (loggerStarted)
+        {
+            if (millis() - previousMillis2 >= fastLoggingInterval)
+            {
+                previousMillis2 = millis();
 
-                logBuffer += gpsData;
+                record.timestamp = millis();
+                record.lat = currentLat;
+                record.lng = currentLng;
+                record.mph = mphInt;
+                record.rpm = rpm;
+                record.tps = 45;
+                record.afr = 132;      // 13.2
+                record.iPressure = 21; // probably kpa 0-100
+                record.airTemperature = 23;
+                record.coolantTemperature = 24;
+                record.oilPressure = 0; // 0
+                record.bVoltage = 125;  // 12.5
+                record.spare = 0;
+
+                flushRingToFram();
             }
         }
     }
-            //-------------------------- TEST STUFF --------------------------------------------------------
 
-            if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
-            {
-                Serial.println("Logging Button Pressed");
-                loggerStarted = true; // Set the flag to prevent re-calling the function
-                setFramHeader(logId.c_str());
-            }
+    //-------------------------- TEST STUFF --------------------------------------------------------
 
-            if (loggerStarted)
-            {
+    // if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
+    // {
+    //     Serial.println("Logging Button Pressed");
+    //     loggerStarted = true; // Set the flag to prevent re-calling the function
+    //     setFramHeader(logId.c_str());
+    // }
 
-                // fast loop for testing
-                if (millis() - previousMillis2 >= fastLoggingInterval)
-                {
-                    previousMillis2 = millis();
-                    record.timestamp = previousMillis2;
-                   // record.timestamp = 1000;
-                    record.lat = 53.310269;
-                    record.lng = -2.460925;
-                    record.afr = 13.01;
-                    record.rpm = 12500;
-                    record.iPressure = 2.01;
-                    record.mph = 123;
-                    record.tps = 45;
-                    record.airTemperature = 23;
-                    record.coolantTemperature = 24;
-                    record.bVoltage = 12.5;
+    // if (loggerStarted)
+    // {
+    //     if (millis() - previousMillis2 >= fastLoggingInterval)
+    //     {
+    //         previousMillis2 = millis();
+    //         record.timestamp = previousMillis2;
+    //         record.lat = 53.310269;
+    //         record.lng = -2.460925;
+    //         record.afr = 251;
+    //         record.rpm = 12500;
+    //         record.iPressure = 9;
+    //         record.mph = 123;
+    //         record.tps = 45;
+    //         record.airTemperature = 23;
+    //         record.coolantTemperature = 24;
+    //         record.bVoltage = 12.5;
 
-                    flushRingToFram();
-                }
-            }
-        }
-    
-
-
+    //         flushRingToFram();
+    //     }
+    // }
+    //Serial.println(rpm);
+}

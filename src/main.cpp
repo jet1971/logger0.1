@@ -5,26 +5,32 @@
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
+#include "freertos/task.h"
 #include "Adafruit_FRAM_SPI.h"
 #include <Wire.h>
+//-----------------------------------------------------------------------------------------------
+#include "driver/pcnt.h" // ESP32 PCNT Library
+#include "soc/pcnt_struct.h"
+
+#define PCNT_COUNT_UNIT PCNT_UNIT_0       // Unit 0 of the ESP32 PCNT Pulse Counter
+#define PCNT_COUNT_CHANNEL PCNT_CHANNEL_0 // Channel 0 of the ESP32 PCNT pulse counter
+#define PCNT_INPUT_SIG_IO GPIO_NUM_13     // Frequency Counter Input - GPIO 13
+//--------------------------------------------------------------------------------------------------
+
+#define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
+
+#define BUTTON_PIN 12 // start ble server if true
+#define START_LOGGING_PIN 15
+#define LED 22
+const uint8_t tachoInput = 4; // Tacho input pin
 
 uint8_t FRAM_CS = 5;
 uint8_t FRAM_SCK = 18;
 uint8_t FRAM_MISO = 19;
 uint8_t FRAM_MOSI = 23;
 
-Adafruit_FRAM_SPI fram =
-    Adafruit_FRAM_SPI(FRAM_SCK, FRAM_MISO, FRAM_MOSI, FRAM_CS);
-
+Adafruit_FRAM_SPI fram = Adafruit_FRAM_SPI(FRAM_SCK, FRAM_MISO, FRAM_MOSI, FRAM_CS);
 uint8_t addrSizeInBytes = 3; // Default to address size three bytes
-
-// TaskHandle_t Task1;
-
-#define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
-#define BUTTON_PIN 12  // start ble server if true
-#define START_LOGGING_PIN 15
-#define LED 22
-const uint8_t tachoInput = 13;
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
 
@@ -37,7 +43,7 @@ static NimBLECharacteristic *pDeleteFileCharacteristic;
 bool isSending = false;
 bool fileNameSet = false;
 File file;
-char buffer[512];//was 480
+char buffer[512]; // was 480
 int bytesRead = 0;
 bool acknowledgmentReceived = true;
 size_t currentFilePosition = 0; // Track the current position in the file
@@ -97,22 +103,18 @@ uint32_t currentDataAddress = DATA_START;
 String logId = "";
 
 // rpm stuff -------------------------------------------------------------------------
-unsigned long rpm = 0;
-hw_timer_t *timer0 = NULL;             // Declare a pointer to a hardware timer object
-unsigned long minValidPulseLength = 1; // Adjust as needed (in millis)
-unsigned long lastPulseTime;
-unsigned long rotation = 0;
-int rpmMultiplier = 4;          // temp hard coded
-int DEFAULT_RPM_MULTIPLIER = 2; // not used yet in logger app, set ig app gui eventually
+hw_timer_t *timer = NULL;
+volatile uint16_t rpm = 0;
+volatile bool rpmUpdated = false;
 
-unsigned long startLowPulseTimer;
-unsigned long startHighPulseTimer;
-bool flag = false;
-bool flag2 = false;
-bool validLowPulse = false;
-bool validHighPulse = false;
-unsigned long duration;
-unsigned long previousLowPulseTimeStamp = 0;
+void IRAM_ATTR onTimer()
+{
+    int16_t count = 0;
+    pcnt_get_counter_value(PCNT_COUNT_UNIT, &count); // Gets the number of pulses counted
+    pcnt_counter_clear(PCNT_COUNT_UNIT);             // Clears the PCNT counter
+    rpm = (count * 60) * 2;                          // Calculates the RPM
+    rpmUpdated = true;
+}
 
 // rpm stuff --------------------------------------------------------------------------
 
@@ -159,29 +161,32 @@ const char UBLOX_INIT[] PROGMEM = {
 
 //-----------------------------------------------------------------------------------------------------
 //                                  tacho stuff
-//-----------------------------------------------------------------------------------------------------
-void IRAM_ATTR
-pulseChange()
 
+void initialize_counter(void) // Pulse counter initialization
 {
-    unsigned long currentMicros = micros();
+    pcnt_config_t pcnt_config = {}; // PCNT create instance
 
-    // Debounce the input signal
-    if (currentMicros - lastPulseTime > minValidPulseLength)
-    {
-        rotation++;                    // Increment pulse count
-        lastPulseTime = currentMicros; // Update last pulse time
-    }
+    pcnt_config.pulse_gpio_num = PCNT_INPUT_SIG_IO; // Configures GPIO for pulse input
+    pcnt_config.unit = PCNT_COUNT_UNIT;             // PCNT counting unit - 0
+    pcnt_config.channel = PCNT_COUNT_CHANNEL;       // PCNT counting channel - 0
+    pcnt_config.pos_mode = PCNT_COUNT_INC;          // Increments count on pulse rise
+    pcnt_config.neg_mode = PCNT_COUNT_INC;          // Increments count on pulse fall
+    pcnt_config.lctrl_mode = PCNT_MODE_KEEP;        // PCNT - lctrl mode disabled
+    pcnt_config.hctrl_mode = PCNT_MODE_KEEP;        // PCNT - hctrl mode - if HIGH counts incrementing
+
+    pcnt_unit_config(&pcnt_config);       // Configures the PCNT counter
+    pcnt_counter_pause(PCNT_COUNT_UNIT);  // Pauses the PCNT counter
+    pcnt_counter_clear(PCNT_COUNT_UNIT);  // Clears the PCNT counter
+    pcnt_counter_resume(PCNT_COUNT_UNIT); // Resumes counting in the PCNT counter
 }
-
-void IRAM_ATTR rpmTimer()
+//----------------------------------------------------------------------------------------
+void initialize_rpm_monitor()
 {
-    rpm = (rotation * 60) * rpmMultiplier; // eg rpmMultiplier = 2,  means 1 pulse per rotation, Steelie, wasted spark
-    rotation = 0;                          //
+    initialize_counter();                                         // Initializes the PCNT pulse counter
+    gpio_matrix_in(PCNT_INPUT_SIG_IO, SIG_IN_FUNC226_IDX, false); // Directs pulse input to PCNT
+}
+//-----------------------------------------------------------------------------------------------------
 
-} // something with a cam sensor will be 1 pulse every 2 rotations, so multiplier will be 4
-
-//-----------------------------------------------------------------------------
 
 void sendFileDetails(NimBLECharacteristic *pCharacteristic)
 {
@@ -363,7 +368,7 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
             Serial.println(value.c_str());
 
             if (value == "SEND_FILE_DETAILS")
-           
+
             {
                 sendFileDetails(pCharacteristic);
             }
@@ -527,19 +532,27 @@ void flushRingToFram()
     fram.writeEnable(false);
 }
 
-// void Task1code(void *parameter) //------------------- core 1 ---------------------------------
+// void Task1code(void *parameter) //------------------- core 0 ---------------------------------
 // {
-//     String *logBuffer = static_cast<String *>(parameter); // Cast the parameter to String*
+
 //     for (;;)
 //     {
-//         if (logBuffer->length() >= bufferSize)
+//         static unsigned long lastRead = 0;
+//         if (millis() - lastRead >= 250)
 //         {
-//             flushBuffer(reinterpret_cast<const uint8_t *>(logBuffer->c_str()), logBuffer->length());
+//             lastRead = millis();
+//             int16_t count = 0;
+//             pcnt_get_counter_value(PCNT_COUNT_UNIT, &count); // Gets the number of pulses counted
+//             pcnt_counter_clear(PCNT_COUNT_UNIT);             // Clears the PCNT counter
+//                                                              // rpm = (count * 60) * 2; // Calculates the RPM
+//             rpm = (count * 60) * 2;                          // Calculates the RPM
+//             // Serial.print("RPM: ");
+//             // Serial.println(rpm);
 //         }
 //     }
 // }
 
-//------------------ core 1 ----------------------------------------------------------------------
+//------------------ core 0 ----------------------------------------------------------------------
 
 LogRecord readRecord;
 
@@ -575,7 +588,7 @@ void readAllStructs(const char *filename)
         Serial.print(", lng: ");
         Serial.print(readRecord.lng, 6);
         Serial.print(", mph: ");
-        Serial.print(readRecord.mph/10.0);
+        Serial.print(readRecord.mph / 10.0);
         Serial.print(", rpm: ");
         Serial.print(readRecord.rpm);
         Serial.print(", tps: ");
@@ -612,10 +625,10 @@ void setup()
     //     Task1code, /* Function to implement the task */
     //     "Task1",   /* Name of the task */
     //     4096,      /* Stack size in words */
-    //    &logBuffer,      /* Task input parameter */
+    //     NULL,      /* Task input parameter */
     //     1,         /* Priority of the task */
-    //     &Task1,    /* Task handle. */
-    //     1          /* Core where the task should run */
+    //     NULL,      /* Task handle. */
+    //     0          /* Core where the task should run */
     // );
 
     //---------------------------------------- stuff----------------------------------------------------------------
@@ -627,12 +640,12 @@ void setup()
 
     //---------------------------------------- stuff----------------------------------------------------------------
 
-    timer0 = timerBegin(0, 80, true);              // Timer 0, prescaler of 80, count up
-    timerAttachInterrupt(timer0, &rpmTimer, true); // Attach rpmTimer function to the timer
-    timerAlarmWrite(timer0, 250000, true);         // Set alarm to call rpmTimer function every quarter second
-    timerAlarmEnable(timer0);                      // Enable the timer alarm
+    // timer0 = timerBegin(0, 80, true);              // Timer 0, prescaler of 80, count up
+    // timerAttachInterrupt(timer0, &rpmTimer, true); // Attach rpmTimer function to the timer
+    // timerAlarmWrite(timer0, 250000, true);         // Set alarm to call rpmTimer function every quarter second
+    // timerAlarmEnable(timer0);                      // Enable the timer alarm
 
-    attachInterrupt(tachoInput, pulseChange, CHANGE); // Attach interrupt to the sensor pin
+    // attachInterrupt(tachoInput, pulseChange, CHANGE); // Attach interrupt to the sensor pin
 
     //--------------------------------------------------------------------------------------------------------
 
@@ -782,7 +795,7 @@ void setup()
     // Initialize the button pin
     pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
-    pinMode(tachoInput, INPUT_PULLUP);
+    // pinMode(tachoInput, INPUT_PULLUP);
     pinMode(LED, OUTPUT);
     //  digitalWrite(LED, HIGH);
 
@@ -828,16 +841,22 @@ void setup()
     //     Serial.print("offset of spare = ");
     //     Serial.println(offsetof(LogRecord, spare));
 
-//    readAllStructs("/na0103202522:15.txt");
+    //    readAllStructs("/na0103202522:15.txt");
+    
+    initialize_rpm_monitor(); // Initialize the rpm monitor
+
+    // Initialize timer
+    timer = timerBegin(0, 80, true); // Timer 0, prescaler of 80, count up
+    timerAttachInterrupt(timer, &onTimer, true);
+    timerAlarmWrite(timer, 250000, true); // 250ms interval
+    timerAlarmEnable(timer);
 }
 
 void loop()
 {
-
-    //   Serial.print("loop running on core ");
-    //   Serial.println(xPortGetCoreID());
-
-    // loop and ble runs running on core 1
+    static unsigned long lastFastLogTime = 0;
+    static unsigned long lastRead = 0;
+    static int skipEntries = 20; // Counter to skip the first twenty entries, 2 seconds worth of data
 
     // Only check and start BLE server if it's not already started
     if (!isBleServerStarted)
@@ -849,141 +868,76 @@ void loop()
         }
     }
 
-    //---------------------------------------------------------------------------------------------
-
+    // Process GPS data
     while (Serial2.available() > 0)
     {
-
-        double currentLat = gps.location.lat();
-        double currentLng = gps.location.lng();
-        float mph = gps.speed.mph();
-        u_int16_t mphInt = mph * 10;
-    
-
         gps.encode(Serial2.read());
 
-        if ((gps.location.isUpdated()) & (makeTimeStamp == true))
+        if (gps.location.isUpdated() && makeTimeStamp)
         {
-
             String venue = detectVenue(gps.location.lat(), gps.location.lng());
 
-            int day = (gps.date.day());
-            int month = (gps.date.month());
-            int year = (gps.date.year());
-            int hour = (gps.time.hour());
-            int min = (gps.time.minute());
+            int day = gps.date.day();
+            int month = gps.date.month();
+            int year = gps.date.year();
+            int hour = gps.time.hour();
+            int min = gps.time.minute();
             makeTimeStamp = false;
 
-            if (day < 10)
-            {
-                String modDay = String(day);
-                formattedDay = "0" + modDay; // should add a zero if day less than 10, eg: returns 02 instead of 2,
-            }
-            else
-            {
-                formattedDay = day;
-            }
+            formattedDay = (day < 10) ? "0" + String(day) : String(day);
+            formattedmonth = (month < 10) ? "0" + String(month) : String(month);
+            formattedHour = (hour < 10) ? "0" + String(hour) : String(hour);
+            formattedMin = (min < 10) ? "0" + String(min) : String(min);
 
-            if (month < 10)
-            {
-                String modmonth = String(month);
-                formattedmonth = "0" + modmonth;
-            }
-            else
-            {
-                formattedmonth = month;
-            }
-            if (hour < 10)
-            {
-                String modHour = String(hour);
-                formattedHour = "0" + modHour;
-            }
-            else
-            {
-                formattedHour = hour;
-            }
-            if (min < 10)
-            {
-                String modMin = String(min);
-                formattedMin = "0" + modMin;
-            }
-            else
-            {
-                formattedMin = min;
-            }
-
-            logId = "/" + String(venue) + String(formattedDay) + String(formattedmonth) + String(year) + String(formattedHour) + ":" + String(formattedMin) + ".txt"; // assemble a file name from the gps time
+            logId = "/" + venue + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
             Serial.print("First print of logID = ");
             Serial.println(logId);
         }
 
-        //---------------------------------------------------------------------------------------------
-
-        // if (!loggerStarted && (gps.location.isUpdated()) && (millis() % 1000 == 0))
-        if (!loggerStarted && (gps.location.isUpdated()))
+        if (!loggerStarted && gps.location.isUpdated())
         {
-            {
-                Serial.println("Logging started");
-                loggerStarted = true; // Set the flag to prevent re-calling the function
-                setFramHeader(logId.c_str());
-                Serial.println(logId);
-                digitalWrite(LED, HIGH);
-            }
-        }
-        //---------------------------------------------------------------------------------------------
-        if (loggerStarted)
-        {
-            if (millis() - previousMillis2 >= fastLoggingInterval)
-            {
-                previousMillis2 = millis();
-
-                record.timestamp = millis();
-                record.lat = currentLat;
-                record.lng = currentLng;
-                record.mph = mphInt;
-                record.rpm = rpm;
-                record.tps = 45;
-                record.afr = 132;      // 13.2
-                record.iPressure = 21; // probably kpa 0-100
-                record.airTemperature = 23;
-                record.coolantTemperature = 24;
-                record.oilPressure = 0; // 0
-                record.bVoltage = 125;  // 12.5
-                record.spare = 0;
-
-                flushRingToFram();
-            }
+            Serial.println("Logging started");
+            loggerStarted = true;
+            setFramHeader(logId.c_str());
+            Serial.println(logId);
+            digitalWrite(LED, HIGH);
         }
     }
 
-    //-------------------------- TEST STUFF --------------------------------------------------------
+    // Fast logging interval
+    if (loggerStarted && millis() - lastFastLogTime >= fastLoggingInterval)
+    {
+        lastFastLogTime = millis();
 
-    // if (!loggerStarted && (digitalRead(START_LOGGING_PIN) == HIGH) && (millis() % 1000 == 0))
-    // {
-    //     Serial.println("Logging Button Pressed");
-    //     loggerStarted = true; // Set the flag to prevent re-calling the function
-    //     setFramHeader(logId.c_str());
-    // }
+        // Skip the first two entries
+        if (skipEntries > 0)
+        {
+            skipEntries--;
+        }
+        else
+        {
+            record.timestamp = millis();
+            record.lat = gps.location.lat();
+            record.lng = gps.location.lng();
+            record.mph = gps.speed.mph() * 10;
+            record.rpm = rpm;
+            record.tps = 45;
+            record.afr = 132;      // 13.2
+            record.iPressure = 21; // probably kpa 0-100
+            record.airTemperature = 23;
+            record.coolantTemperature = 24;
+            record.oilPressure = 0; // 0
+            record.bVoltage = 125;  // 12.5
+            record.spare = 0;
 
-    // if (loggerStarted)
-    // {
-    //     if (millis() - previousMillis2 >= fastLoggingInterval)
-    //     {
-    //         previousMillis2 = millis();
-    //         record.timestamp = previousMillis2;
-    //         record.lat = 53.310269;
-    //         record.lng = -2.460925;
-    //         record.afr = 251;
-    //         record.rpm = 12500;
-    //         record.iPressure = 9;
-    //         record.mph = 123;
-    //         record.tps = 45;
-    //         record.airTemperature = 23;
-    //         record.coolantTemperature = 24;
-    //         record.bVoltage = 12.5;
+            flushRingToFram();
+        }
+    }
 
-    //         flushRingToFram();
-    //     }
-    // }
-    //Serial.println(rpm);
+    // RPM reading interval
+    if (rpmUpdated)
+    {
+        rpmUpdated = false;
+       
+    }
 }

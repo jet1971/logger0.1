@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <LittleFS.h> // Use the built-in LittleFS library
+#include <LittleFS.h>
 #include "LittleFSHandler.h"
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
@@ -8,21 +8,24 @@
 #include "freertos/task.h"
 #include "Adafruit_FRAM_SPI.h"
 #include <Wire.h>
-//-----------------------------------------------------------------------------------------------
-#include "driver/pcnt.h" // ESP32 PCNT Library
-#include "soc/pcnt_struct.h"
 
-#define PCNT_COUNT_UNIT PCNT_UNIT_0       // Unit 0 of the ESP32 PCNT Pulse Counter
-#define PCNT_COUNT_CHANNEL PCNT_CHANNEL_0 // Channel 0 of the ESP32 PCNT pulse counter
-#define PCNT_INPUT_SIG_IO GPIO_NUM_13     // Frequency Counter Input - GPIO 13
+//-----------------------------------------------------------------------------------------------
+// #include "driver/pcnt.h" // ESP32 PCNT Library
+// #include "soc/pcnt_struct.h"
+
+// #define PCNT_COUNT_UNIT PCNT_UNIT_0       // Unit 0 of the ESP32 PCNT Pulse Counter
+// #define PCNT_COUNT_CHANNEL PCNT_CHANNEL_0 // Channel 0 of the ESP32 PCNT pulse counter
+// #define PCNT_INPUT_SIG_IO GPIO_NUM_13     // Frequency Counter Input - GPIO 13
 //--------------------------------------------------------------------------------------------------
 
 #define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
 
-#define BUTTON_PIN 12 // start ble server if true
+#define BUTTON_PIN 2 // start ble server if true
 #define START_LOGGING_PIN 15
 #define LED 22
-const uint8_t tachoInput = 4; // Tacho input pin
+// const uint8_t tachoInput = 4; // Tacho input pin
+#define TXD1 13 // Custom UART TX pin
+#define RXD1 25 // Custom UART RX pin
 
 uint8_t FRAM_CS = 5;
 uint8_t FRAM_SCK = 18;
@@ -56,9 +59,9 @@ String formattedmonth;
 String formattedHour;
 String formattedMin;
 
-//  stuff -------------------------------------------------------------------------
+//  rpm ------------------------------------------------------------------------------------------------
 
-// String logId; // becomes the log name, set in setup, re-enable later
+//  rpm ------------------------------------------------------------------------------------------------
 
 bool loggerStarted = false;
 
@@ -103,20 +106,22 @@ uint32_t currentDataAddress = DATA_START;
 String logId = "";
 
 // rpm stuff -------------------------------------------------------------------------
-hw_timer_t *timer = NULL;
-volatile uint16_t rpm = 0;
-volatile bool rpmUpdated = false;
+// hw_timer_t *timer = NULL;
+// volatile uint16_t rpm = 0;
+// volatile bool rpmUpdated = false;
 
-void IRAM_ATTR onTimer()
-{
-    int16_t count = 0;
-    pcnt_get_counter_value(PCNT_COUNT_UNIT, &count); // Gets the number of pulses counted
-    pcnt_counter_clear(PCNT_COUNT_UNIT);             // Clears the PCNT counter
-    rpm = (count * 60) * 2;                          // Calculates the RPM
-    rpmUpdated = true;
-}
+// void IRAM_ATTR onTimer()
+// {
+//     int16_t count = 0;
+//     pcnt_get_counter_value(PCNT_COUNT_UNIT, &count); // Gets the number of pulses counted
+//     pcnt_counter_clear(PCNT_COUNT_UNIT);             // Clears the PCNT counter
+//     rpm = (count * 60) * 4;                          // Calculates the RPM
+//     rpmUpdated = true;
+// }
 
 // rpm stuff --------------------------------------------------------------------------
+
+u_int32_t rpm;
 
 // logging times-----------------------------------------------------------------------
 unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
@@ -162,31 +167,36 @@ const char UBLOX_INIT[] PROGMEM = {
 //-----------------------------------------------------------------------------------------------------
 //                                  tacho stuff
 
-void initialize_counter(void) // Pulse counter initialization
-{
-    pcnt_config_t pcnt_config = {}; // PCNT create instance
+// void initialize_counter(void) // Pulse counter initialization
+// {
+//     pcnt_config_t pcnt_config = {}; // PCNT create instance
 
-    pcnt_config.pulse_gpio_num = PCNT_INPUT_SIG_IO; // Configures GPIO for pulse input
-    pcnt_config.unit = PCNT_COUNT_UNIT;             // PCNT counting unit - 0
-    pcnt_config.channel = PCNT_COUNT_CHANNEL;       // PCNT counting channel - 0
-    pcnt_config.pos_mode = PCNT_COUNT_INC;          // Increments count on pulse rise
-    pcnt_config.neg_mode = PCNT_COUNT_INC;          // Increments count on pulse fall
-    pcnt_config.lctrl_mode = PCNT_MODE_KEEP;        // PCNT - lctrl mode disabled
-    pcnt_config.hctrl_mode = PCNT_MODE_KEEP;        // PCNT - hctrl mode - if HIGH counts incrementing
+//     pcnt_config.pulse_gpio_num = PCNT_INPUT_SIG_IO; // Configures GPIO for pulse input
+//     pcnt_config.unit = PCNT_COUNT_UNIT;             // PCNT counting unit - 0
+//     pcnt_config.channel = PCNT_COUNT_CHANNEL;       // PCNT counting channel - 0
+//     pcnt_config.pos_mode = PCNT_COUNT_INC;          // Increments count on pulse rise
+//     pcnt_config.neg_mode = PCNT_COUNT_INC;          // Increments count on pulse fall
+//     pcnt_config.lctrl_mode = PCNT_MODE_KEEP;        // PCNT - lctrl mode disabled
+//     pcnt_config.hctrl_mode = PCNT_MODE_KEEP;        // PCNT - hctrl mode - if HIGH counts incrementing
 
-    pcnt_unit_config(&pcnt_config);       // Configures the PCNT counter
-    pcnt_counter_pause(PCNT_COUNT_UNIT);  // Pauses the PCNT counter
-    pcnt_counter_clear(PCNT_COUNT_UNIT);  // Clears the PCNT counter
-    pcnt_counter_resume(PCNT_COUNT_UNIT); // Resumes counting in the PCNT counter
-}
+//     pcnt_unit_config(&pcnt_config);       // Configures the PCNT counter
+
+//     // -- Enable the glitch filter --
+//     // For example, 100 means pulses shorter than ~1.25 microseconds are ignored.
+//     pcnt_set_filter_value(PCNT_COUNT_UNIT, 10);// 1000 = 1ms
+//     pcnt_filter_enable(PCNT_COUNT_UNIT);// Enable the filter on the pulse input signal
+
+//     pcnt_counter_pause(PCNT_COUNT_UNIT);  // Pauses the PCNT counter
+//     pcnt_counter_clear(PCNT_COUNT_UNIT);  // Clears the PCNT counter
+//     pcnt_counter_resume(PCNT_COUNT_UNIT); // Resumes counting in the PCNT counter
+// }
 //----------------------------------------------------------------------------------------
-void initialize_rpm_monitor()
-{
-    initialize_counter();                                         // Initializes the PCNT pulse counter
-    gpio_matrix_in(PCNT_INPUT_SIG_IO, SIG_IN_FUNC226_IDX, false); // Directs pulse input to PCNT
-}
+// void initialize_rpm_monitor()
+// {
+//     initialize_counter();                                         // Initializes the PCNT pulse counter
+//     gpio_matrix_in(PCNT_INPUT_SIG_IO, SIG_IN_FUNC226_IDX, false); // Directs pulse input to PCNT
+// }
 //-----------------------------------------------------------------------------------------------------
-
 
 void sendFileDetails(NimBLECharacteristic *pCharacteristic)
 {
@@ -376,10 +386,43 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
     }
 };
 
+void checkSerial1and2Status()
+{
+    if (Serial1.available())
+    {
+        Serial.println("Serial1 is still active!");
+    }
+    else
+    {
+        Serial.println("Serial2 is OFF or no data available.");
+    }
+    if (Serial2.available())
+    {
+        Serial.println("Serial2 is still active!");
+    }
+    else
+    {
+        Serial.println("Serial2 is OFF or no data available.");
+    }
+}
+
+//------------------------------------------------------------------------------------------
+
+void stopSerial1and2ForBLE()
+{
+    Serial1.end(); // Turn off Serial1 to free CPU time
+    delay(200);
+    checkSerial1and2Status();
+    Serial2.end(); // Turn off Serial2 to free CPU time
+    delay(200);
+}
+
 //-----------------------------------------------------------------------------------------------
 
 void startBLEServer()
 {
+    stopSerial1and2ForBLE(); // Stop Serial1 and Serial2 to free up CPU time
+    Serial.println("Turning off Serial1 and Serial2 to free up CPU time");
     Serial.println("Starting NimBLE Server");
 
     NimBLEDevice::init("JT DataLogger_1");
@@ -613,11 +656,25 @@ void readAllStructs(const char *filename)
     file.close();
 }
 
+void uartTask() // This is getting the rpm from the slave esp32
+
+{
+    if (Serial1.available())
+    {
+        String input = Serial1.readStringUntil('\n'); // Read until newline
+        rpm = input.toInt();                          // Convert to integer
+    }
+}
+
+//------------------------------------------------------------------------------------------------
+
 void setup()
 {
 
     Serial.begin(115200);
+    Serial1.begin(115200, SERIAL_8N1, RXD1, TXD1);
     Serial2.begin(9600); // TX = GPIO 17 RX = 16
+                         //  xTaskCreatePinnedToCore(uartTask, "UART Task", 4096, NULL, 1, NULL, 1);
 
     //---------------------------------------- stuff----------------------------------------------------------------
 
@@ -795,9 +852,7 @@ void setup()
     // Initialize the button pin
     pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
-    // pinMode(tachoInput, INPUT_PULLUP);
     pinMode(LED, OUTPUT);
-    //  digitalWrite(LED, HIGH);
 
     // Initial check in setup to see if BLE server should start right away
     if (checkServerStartCondition())
@@ -809,8 +864,6 @@ void setup()
     {
         Serial.println("Condition not met, waiting to start BLE server...");
     }
-    Serial.print("sizeof(LogRecord) = ");
-    Serial.println(sizeof(LogRecord));
 
     //  used to check the offset of each struct element
 
@@ -842,14 +895,15 @@ void setup()
     //     Serial.println(offsetof(LogRecord, spare));
 
     //    readAllStructs("/na0103202522:15.txt");
-    
-    initialize_rpm_monitor(); // Initialize the rpm monitor
 
-    // Initialize timer
-    timer = timerBegin(0, 80, true); // Timer 0, prescaler of 80, count up
-    timerAttachInterrupt(timer, &onTimer, true);
-    timerAlarmWrite(timer, 250000, true); // 250ms interval
-    timerAlarmEnable(timer);
+    //----------------------------------------------------------------------------------------
+    // initialize_rpm_monitor(); // Initialize the rpm monitor
+
+    // // Initialize timer
+    // timer = timerBegin(0, 80, true); // Timer 0, prescaler of 80, count up
+    // timerAttachInterrupt(timer, &onTimer, true);
+    // timerAlarmWrite(timer, 250000, true); // 250ms interval
+    // timerAlarmEnable(timer);
 }
 
 void loop()
@@ -908,8 +962,9 @@ void loop()
     if (loggerStarted && millis() - lastFastLogTime >= fastLoggingInterval)
     {
         lastFastLogTime = millis();
+        uartTask(); // get rpm data
 
-        // Skip the first two entries
+        // Skip the first xxxx entries
         if (skipEntries > 0)
         {
             skipEntries--;
@@ -934,10 +989,5 @@ void loop()
         }
     }
 
-    // RPM reading interval
-    if (rpmUpdated)
-    {
-        rpmUpdated = false;
-       
-    }
+    // Serial.println(rpm);
 }

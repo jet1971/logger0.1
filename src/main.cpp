@@ -1,7 +1,5 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <LittleFS.h>
-#include "LittleFSHandler.h"
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
@@ -9,25 +7,23 @@
 #include "Adafruit_FRAM_SPI.h"
 #include <Wire.h>
 
-//-----------------------------------------------------------------------------------------------
-// #include "driver/pcnt.h" // ESP32 PCNT Library
-// #include "soc/pcnt_struct.h"
-
-// #define PCNT_COUNT_UNIT PCNT_UNIT_0       // Unit 0 of the ESP32 PCNT Pulse Counter
-// #define PCNT_COUNT_CHANNEL PCNT_CHANNEL_0 // Channel 0 of the ESP32 PCNT pulse counter
-// #define PCNT_INPUT_SIG_IO GPIO_NUM_13     // Frequency Counter Input - GPIO 13
-//--------------------------------------------------------------------------------------------------
+#include "ADS1115Module.h"
+#include <LittleFS.h>
+#include "LittleFSHandler.h"
 
 #define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
 
-#define BUTTON_PIN 2 // start ble server if true
+#define BUTTON_PIN 2 // start ble server if true, NOW GOT A LED ATTATCHED TO THIS PIN (D1)
 #define START_LOGGING_PIN 15
-#define LED 22
+#define LED_1 14
+#define LED_2 2
+
 // const uint8_t tachoInput = 4; // Tacho input pin
 #define TXD1 13 // Custom UART TX pin
 #define RXD1 25 // Custom UART RX pin
 
-uint8_t FRAM_CS = 5;
+uint8_t FRAM_CS = 33; // Chip select pin for FRAM CS1
+//uint8_t FRAM_CS = 32; // Chip select pin for FRAM CS2
 uint8_t FRAM_SCK = 18;
 uint8_t FRAM_MISO = 19;
 uint8_t FRAM_MOSI = 23;
@@ -58,10 +54,6 @@ String formattedDay;
 String formattedmonth;
 String formattedHour;
 String formattedMin;
-
-//  rpm ------------------------------------------------------------------------------------------------
-
-//  rpm ------------------------------------------------------------------------------------------------
 
 bool loggerStarted = false;
 
@@ -96,30 +88,11 @@ FramLogHeader header;
 FramLogHeader header2;
 LogRecord record;
 
-// FastLogEntry fastLogEntry;   // Create a FastLogEntry struct
-// SlowLogEntry slowLogEntry;   // Create a SlowLogEntry struct
-
 uint32_t currentDataAddress = DATA_START;
 
 // buffer stuff -------------------------------------------------------------------------
 
 String logId = "";
-
-// rpm stuff -------------------------------------------------------------------------
-// hw_timer_t *timer = NULL;
-// volatile uint16_t rpm = 0;
-// volatile bool rpmUpdated = false;
-
-// void IRAM_ATTR onTimer()
-// {
-//     int16_t count = 0;
-//     pcnt_get_counter_value(PCNT_COUNT_UNIT, &count); // Gets the number of pulses counted
-//     pcnt_counter_clear(PCNT_COUNT_UNIT);             // Clears the PCNT counter
-//     rpm = (count * 60) * 4;                          // Calculates the RPM
-//     rpmUpdated = true;
-// }
-
-// rpm stuff --------------------------------------------------------------------------
 
 u_int32_t rpm;
 
@@ -163,40 +136,6 @@ const char UBLOX_INIT[] PROGMEM = {
     // 0xB5,0x62,0x06,0x08,0x06,0x00,0xC8,0x00,0x01,0x00,0x01,0x00,0xDE,0x6A, //(5Hz)
     // 0xB5,0x62,0x06,0x08,0x06,0x00,0xE8,0x03,0x01,0x00,0x01,0x00,0x01,0x39, //(1Hz)
 };
-
-//-----------------------------------------------------------------------------------------------------
-//                                  tacho stuff
-
-// void initialize_counter(void) // Pulse counter initialization
-// {
-//     pcnt_config_t pcnt_config = {}; // PCNT create instance
-
-//     pcnt_config.pulse_gpio_num = PCNT_INPUT_SIG_IO; // Configures GPIO for pulse input
-//     pcnt_config.unit = PCNT_COUNT_UNIT;             // PCNT counting unit - 0
-//     pcnt_config.channel = PCNT_COUNT_CHANNEL;       // PCNT counting channel - 0
-//     pcnt_config.pos_mode = PCNT_COUNT_INC;          // Increments count on pulse rise
-//     pcnt_config.neg_mode = PCNT_COUNT_INC;          // Increments count on pulse fall
-//     pcnt_config.lctrl_mode = PCNT_MODE_KEEP;        // PCNT - lctrl mode disabled
-//     pcnt_config.hctrl_mode = PCNT_MODE_KEEP;        // PCNT - hctrl mode - if HIGH counts incrementing
-
-//     pcnt_unit_config(&pcnt_config);       // Configures the PCNT counter
-
-//     // -- Enable the glitch filter --
-//     // For example, 100 means pulses shorter than ~1.25 microseconds are ignored.
-//     pcnt_set_filter_value(PCNT_COUNT_UNIT, 10);// 1000 = 1ms
-//     pcnt_filter_enable(PCNT_COUNT_UNIT);// Enable the filter on the pulse input signal
-
-//     pcnt_counter_pause(PCNT_COUNT_UNIT);  // Pauses the PCNT counter
-//     pcnt_counter_clear(PCNT_COUNT_UNIT);  // Clears the PCNT counter
-//     pcnt_counter_resume(PCNT_COUNT_UNIT); // Resumes counting in the PCNT counter
-// }
-//----------------------------------------------------------------------------------------
-// void initialize_rpm_monitor()
-// {
-//     initialize_counter();                                         // Initializes the PCNT pulse counter
-//     gpio_matrix_in(PCNT_INPUT_SIG_IO, SIG_IN_FUNC226_IDX, false); // Directs pulse input to PCNT
-// }
-//-----------------------------------------------------------------------------------------------------
 
 void sendFileDetails(NimBLECharacteristic *pCharacteristic)
 {
@@ -410,10 +349,10 @@ void checkSerial1and2Status()
 
 void stopSerial1and2ForBLE()
 {
-    Serial1.end(); // Turn off Serial1 to free CPU time
+    Serial1.end();
     delay(200);
-    checkSerial1and2Status();
     Serial2.end(); // Turn off Serial2 to free CPU time
+                   // checkSerial1and2Status();
     delay(200);
 }
 
@@ -566,6 +505,14 @@ void flushRingToFram()
 {
     fram.writeEnable(true);
     fram.write(currentDataAddress, (uint8_t *)&record, sizeof(record));
+
+    // uint8_t *bytePtr = (uint8_t *)&record;
+    // Serial.println("Raw bytes of record just written:");
+    // for (int i = 0; i < sizeof(record); i++)
+    // {
+    //     Serial.printf("Byte[%d] = %u\n", i, bytePtr[i]);
+    // }
+
     fram.writeEnable(false);
     currentDataAddress += sizeof(record);
     header.dataLength += sizeof(record);
@@ -574,28 +521,6 @@ void flushRingToFram()
     fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // Update the header with the new data length
     fram.writeEnable(false);
 }
-
-// void Task1code(void *parameter) //------------------- core 0 ---------------------------------
-// {
-
-//     for (;;)
-//     {
-//         static unsigned long lastRead = 0;
-//         if (millis() - lastRead >= 250)
-//         {
-//             lastRead = millis();
-//             int16_t count = 0;
-//             pcnt_get_counter_value(PCNT_COUNT_UNIT, &count); // Gets the number of pulses counted
-//             pcnt_counter_clear(PCNT_COUNT_UNIT);             // Clears the PCNT counter
-//                                                              // rpm = (count * 60) * 2; // Calculates the RPM
-//             rpm = (count * 60) * 2;                          // Calculates the RPM
-//             // Serial.print("RPM: ");
-//             // Serial.println(rpm);
-//         }
-//     }
-// }
-
-//------------------ core 0 ----------------------------------------------------------------------
 
 LogRecord readRecord;
 
@@ -656,55 +581,49 @@ void readAllStructs(const char *filename)
     file.close();
 }
 
-void uartTask() // This is getting the rpm from the slave esp32
+//------------------------------------------------------------------------------------------------
+//                      This is getting the rpm from the slave esp32
 
+char uartBuffer[16];
+uint8_t uartIndex = 0;
+
+void uartTask()
 {
-    if (Serial1.available())
+    while (Serial1.available())
     {
-        String input = Serial1.readStringUntil('\n'); // Read until newline
-        rpm = input.toInt();                          // Convert to integer
+        char incoming = Serial1.read();
+
+        if (incoming == '\n')
+        {
+            uartBuffer[uartIndex] = '\0'; // Null terminate
+            int value = atoi(uartBuffer);
+            if (value > 200 && value < 20000)
+            {
+                rpm = value;
+            }
+            uartIndex = 0; // Reset for next message
+        }
+        else if (uartIndex < sizeof(uartBuffer) - 1)
+        {
+            uartBuffer[uartIndex++] = incoming;
+        }
+        else
+        {
+            uartIndex = 0; // Overflow, reset
+        }
     }
 }
-
 //------------------------------------------------------------------------------------------------
 
 void setup()
 {
 
     Serial.begin(115200);
-    Serial1.begin(115200, SERIAL_8N1, RXD1, TXD1);
-    Serial2.begin(9600); // TX = GPIO 17 RX = 16
-                         //  xTaskCreatePinnedToCore(uartTask, "UART Task", 4096, NULL, 1, NULL, 1);
-
-    //---------------------------------------- stuff----------------------------------------------------------------
-
-    // xTaskCreatePinnedToCore(
-    //     Task1code, /* Function to implement the task */
-    //     "Task1",   /* Name of the task */
-    //     4096,      /* Stack size in words */
-    //     NULL,      /* Task input parameter */
-    //     1,         /* Priority of the task */
-    //     NULL,      /* Task handle. */
-    //     0          /* Core where the task should run */
-    // );
-
-    //---------------------------------------- stuff----------------------------------------------------------------
-
-    //---------------------------------Timer/Tahco ----------------------------------------------------------------
-
-    // /* Use 1st timer of 4,  the 0 is the first timer
-    //   /* 1 tick takes 1/(80MHZ/80) = 1us so set divider to 80
-
-    //---------------------------------------- stuff----------------------------------------------------------------
-
-    // timer0 = timerBegin(0, 80, true);              // Timer 0, prescaler of 80, count up
-    // timerAttachInterrupt(timer0, &rpmTimer, true); // Attach rpmTimer function to the timer
-    // timerAlarmWrite(timer0, 250000, true);         // Set alarm to call rpmTimer function every quarter second
-    // timerAlarmEnable(timer0);                      // Enable the timer alarm
-
-    // attachInterrupt(tachoInput, pulseChange, CHANGE); // Attach interrupt to the sensor pin
-
-    //--------------------------------------------------------------------------------------------------------
+    Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1); // RXD1 = GPIO 25 TXD1 = GPIO 13, slave esp32
+    Serial2.begin(9600);                         // TX = GPIO 17 RX = 16, GPS UNIT
+    Wire.begin();
+    setupADS();
+    
 
     // send configuration data in UBX protocol
     for (int i = 0; i < sizeof(UBLOX_INIT); i++)
@@ -740,8 +659,8 @@ void setup()
         while (1)
             ;
     }
-    fram.setAddressSize(addrSizeInBytes); // Set the address size for the FRAM chip, mucho importante!!
-
+    //-----------------------------------------------------------------------
+    fram.setAddressSize(addrSizeInBytes);                            // Set the address size for the FRAM chip, mucho importante!!
     fram.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM
     Serial.println("This is the file name about to be saved to LittleFS");
     Serial.println(header2.fileName);
@@ -852,7 +771,8 @@ void setup()
     // Initialize the button pin
     pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
-    pinMode(LED, OUTPUT);
+    pinMode(LED_1, OUTPUT);
+    pinMode(LED_2, OUTPUT);
 
     // Initial check in setup to see if BLE server should start right away
     if (checkServerStartCondition())
@@ -867,43 +787,46 @@ void setup()
 
     //  used to check the offset of each struct element
 
-    //   Serial.print("offset of timestamp = ");
-    //    Serial.print(offsetof(LogRecord, timestamp));
-    //     Serial.print("offset of lat = ");
-    //     Serial.println(offsetof(LogRecord, lat));
-    //     Serial.print("offset of lng = ");
-    //     Serial.println(offsetof(LogRecord, lng));
-    //     Serial.print("offset of mph = ");
-    //     Serial.println(offsetof(LogRecord, mph));
-    //     Serial.print("offset of rpm = ");
-    //     Serial.println(offsetof(LogRecord, rpm));
-    //     Serial.print("offset of tps = ");
-    //     Serial.println(offsetof(LogRecord, tps));
-    //     Serial.print("offset of afr = ");
-    //     Serial.println(offsetof(LogRecord, afr));
-    //     Serial.print("offset of iPressure = ");
-    //     Serial.println(offsetof(LogRecord, iPressure));
-    //     Serial.print("offset of airTemperature = ");
-    //     Serial.println(offsetof(LogRecord, airTemperature));
-    //     Serial.print("offset of coolantTemperature = ");
-    //     Serial.println(offsetof(LogRecord, coolantTemperature));
-    //     Serial.print("offset of oilPressure = ");
-    //     Serial.println(offsetof(LogRecord, oilPressure));
-    //     Serial.print("offset of bVoltage = ");
-    //     Serial.println(offsetof(LogRecord, bVoltage));
-    //     Serial.print("offset of spare = ");
-    //     Serial.println(offsetof(LogRecord, spare));
+    // Serial.print("sizeof(LogRecord) = ");
+    // Serial.println(sizeof(LogRecord));
+
+    // Serial.print("offset of timestamp = ");
+    // Serial.print(offsetof(LogRecord, timestamp));
+    // Serial.print("offset of lat = ");
+    // Serial.println(offsetof(LogRecord, lat));
+    // Serial.print("offset of lng = ");
+    // Serial.println(offsetof(LogRecord, lng));
+    // Serial.print("offset of mph = ");
+    // Serial.println(offsetof(LogRecord, mph));
+    // Serial.print("offset of rpm = ");
+    // Serial.println(offsetof(LogRecord, rpm));
+    // Serial.print("offset of tps = ");
+    // Serial.println(offsetof(LogRecord, tps));
+    // Serial.print("offset of afr = ");
+    // Serial.println(offsetof(LogRecord, afr));
+    // Serial.print("offset of iPressure = ");
+    // Serial.println(offsetof(LogRecord, iPressure));
+    // Serial.print("offset of airTemperature = ");
+    // Serial.println(offsetof(LogRecord, airTemperature));
+    // Serial.print("offset of coolantTemperature = ");
+    // Serial.println(offsetof(LogRecord, coolantTemperature));
+    // Serial.print("offset of oilPressure = ");
+    // Serial.println(offsetof(LogRecord, oilPressure));
+    // Serial.print("offset of bVoltage = ");
+    // Serial.println(offsetof(LogRecord, bVoltage));
+    // Serial.print("offset of spare = ");
+    // Serial.println(offsetof(LogRecord, spare));
 
     //    readAllStructs("/na0103202522:15.txt");
 
     //----------------------------------------------------------------------------------------
-    // initialize_rpm_monitor(); // Initialize the rpm monitor
 
     // // Initialize timer
     // timer = timerBegin(0, 80, true); // Timer 0, prescaler of 80, count up
     // timerAttachInterrupt(timer, &onTimer, true);
     // timerAlarmWrite(timer, 250000, true); // 250ms interval
     // timerAlarmEnable(timer);
+    //  digitalWrite(LED, HIGH);
 }
 
 void loop()
@@ -923,7 +846,7 @@ void loop()
     }
 
     // Process GPS data
-    while (Serial2.available() > 0)
+    if (Serial2.available() > 0)
     {
         gps.encode(Serial2.read());
 
@@ -954,7 +877,7 @@ void loop()
             loggerStarted = true;
             setFramHeader(logId.c_str());
             Serial.println(logId);
-            digitalWrite(LED, HIGH);
+            digitalWrite(LED_1, HIGH);
         }
     }
 
@@ -976,18 +899,28 @@ void loop()
             record.lng = gps.location.lng();
             record.mph = gps.speed.mph() * 10;
             record.rpm = rpm;
-            record.tps = 45;
-            record.afr = 132;      // 13.2
-            record.iPressure = 21; // probably kpa 0-100
-            record.airTemperature = 23;
-            record.coolantTemperature = 24;
-            record.oilPressure = 0; // 0
-            record.bVoltage = 125;  // 12.5
-            record.spare = 0;
+            record.tps = (readTps(ADS1, 2));                          // 0-100% throttle position sensor
+            record.afr = (readSensor(ADS2, 0, 3300.0, 6800.0));       // 132;     132 = 13.2:1
+            record.iPressure = (readSensor(ADS1, 1, 3300.0, 6800.0)); // probably kpa 0-100
+            record.airTemperature = (readSensor(ADS2, 2, 3300.0, 6800.0));
+            record.coolantTemperature = (readSensor(ADS2, 3, 3300.0, 6800.0));
+            record.oilPressure = (readSensor(ADS1, 3, 10000.0, 2000.0)); // 0
+            record.bVoltage = (readSensor(ADS2, 1, 49900.0, 10000.0));   // 20 to ? volts battery voltage 49.9k to 10k
+            record.spare = (readSensor(ADS1, 0, 3300.0, 6800.0));        // spare
 
             flushRingToFram();
         }
     }
 
     // Serial.println(rpm);
+    // Serial.println(readSensor(ADS1, 0, 3300.0, 6800.0)); // 5 to 3.3 volts
+    //  Serial.println(readSensor(ADS1, 0, 9808.0, 1944.0)); // actual values used for testing
+    // Serial.println(readSensor(ADS2, 3, 47000, 10000.0)); 20 to 3.3 volts battery voltag
+
+    // Serial.println(readTps(ADS1, 0));
+    // val = map(val, 0, 32, 0, 100);
+    // Serial.print("Sensor value: ");
+    // Serial.println(val);
+
+    Serial.println(readSensor(ADS2, 1, 49900.0, 10000.0));// BATT VOLTAGE TEST
 }

@@ -1,6 +1,9 @@
 // #include "FRAMModule.h"
 
-// Adafruit_FRAM_SPI fram = Adafruit_FRAM_SPI(18, 19, 23, 5); // SCK, MISO, MOSI, CS
+
+// Adafruit_FRAM_SPI fram = Adafruit_FRAM_SPI(18, 19, 23, 33); // SCK, MISO, MOSI, CS
+
+// const uint8_t addrSizeInBytes = 3; // Default to address size three bytes
 // const size_t HEADER_ADDRESS = 0x00;
 // const uint32_t DATA_START = sizeof(FramLogHeader);
 
@@ -11,7 +14,7 @@
 // {
 //     if (fram.begin())
 //     {
-//         fram.setAddressSize(3);
+//         fram.setAddressSize(addrSizeInBytes); // Set the address size for the FRAM chip, mucho importante!!
 //         return true;
 //     }
 //     return false;
@@ -28,7 +31,7 @@
 //     Serial.println("FRAM header set");
 // }
 
-// void flushRecordToFRAM(const LogRecord &record)
+// void flushRecordToFRAM(const LogRecord record)
 // {
 //     fram.writeEnable(true);
 //     fram.write(currentDataAddress, (uint8_t *)&record, sizeof(record));

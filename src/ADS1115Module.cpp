@@ -36,7 +36,7 @@ uint8_t readSensor(ADS1115 &ads, int channel, double r1, double r2)
 // Define these (later replace these with values saved from app)
 const int tpsMin = 0;  // Minimum raw ADC value (0.5V ≈ 500mV)
 // const int tpsMax = 6612; // Maximum raw ADC value (4.5V ≈ 4500mV)????
-const int tpsMax = 4200; // Maximum raw ADC value (4.5V ≈ 4500mV)????
+const int tpsMax = 26725; // Maximum raw ADC value (4.5V ≈ 4500mV)????
 
 uint8_t readTps(ADS1115 &ads, int channel)
 {
@@ -47,6 +47,8 @@ uint8_t readTps(ADS1115 &ads, int channel)
         raw = tpsMin;
     if (raw > tpsMax)
         raw = tpsMax;
+    // Serial.print("raw: ");
+    // Serial.println(raw);
 
     // Map raw range [tpsMin–tpsMax] to [0–100] %
     uint8_t val = (uint32_t)(raw - tpsMin) * 100 / (tpsMax - tpsMin);

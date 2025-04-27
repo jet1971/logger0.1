@@ -10,17 +10,24 @@
 #include "ADS1115Module.h"
 #include <LittleFS.h>
 #include "LittleFSHandler.h"
+#include "StructSizeOffset.h"
+
 
 #define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
 
-#define BUTTON_PIN 2 // start ble server if true, NOW GOT A LED ATTATCHED TO THIS PIN (D1)
-#define START_LOGGING_PIN 15
+bool bleActive = true;
+bool loggingStarted = false;
+
+#define SPEED_THRESHOLD 10.0 // mph
+
 #define LED_1 14
 #define LED_2 2
+#define LAMBDA_CONTROL_PIN 25
+#define SEND_RPM_ENABLE_PIN 26
 
 // const uint8_t tachoInput = 4; // Tacho input pin
 #define TXD1 13 // Custom UART TX pin
-#define RXD1 25 // Custom UART RX pin
+#define RXD1 27 // Custom UART RX pin
 
 uint8_t FRAM_CS = 33; // Chip select pin for FRAM CS1
 //uint8_t FRAM_CS = 32; // Chip select pin for FRAM CS2
@@ -64,22 +71,22 @@ struct FramLogHeader
     u_int32_t dataLength;
 };
 
-struct LogRecord
-{
-    uint32_t timestamp;
-    float lat;
-    float lng;
-    uint16_t mph; // speed x 10
-    uint16_t rpm;
-    uint8_t tps;                // throttle position sensor
-    uint8_t afr;                // lambda x 10
-    uint8_t iPressure;          // intake pressure use MPX5100DP, 0-14.5PSI OR 0 TO 100KPA Tranmit in KPA
-    uint8_t airTemperature;     // air temp
-    uint8_t coolantTemperature; // coolant temp
-    uint8_t oilPressure;        //  oil pressure
-    uint8_t bVoltage;           // battery voltage x 10
-    uint8_t spare;              // spare
-};
+// struct LogRecord
+// {
+//     uint32_t timestamp;
+//     float lat;
+//     float lng;
+//     uint16_t mph; // speed x 10
+//     uint16_t rpm;
+//     uint8_t tps;                // throttle position sensor
+//     uint8_t afr;                // lambda x 10
+//     uint8_t iPressure;          // intake pressure use MPX5100DP, 0-14.5PSI OR 0 TO 100KPA Tranmit in KPA
+//     uint8_t airTemperature;     // air temp
+//     uint8_t coolantTemperature; // coolant temp
+//     uint8_t oilPressure;        //  oil pressure
+//     uint8_t bVoltage;           // battery voltage x 10
+//     uint8_t spare;              // spare
+// };
 
 static const size_t HEADER_ADDRESS = 0x00;
 static const uint32_t DATA_START = sizeof(FramLogHeader);
@@ -360,8 +367,8 @@ void stopSerial1and2ForBLE()
 
 void startBLEServer()
 {
-    stopSerial1and2ForBLE(); // Stop Serial1 and Serial2 to free up CPU time
-    Serial.println("Turning off Serial1 and Serial2 to free up CPU time");
+  //  stopSerial1and2ForBLE(); // Stop Serial1 and Serial2 to free up CPU time
+  //  Serial.println("Turning off Serial1 and Serial2 to free up CPU time");
     Serial.println("Starting NimBLE Server");
 
     NimBLEDevice::init("JT DataLogger_1");
@@ -413,18 +420,28 @@ void startBLEServer()
 
     Serial.println("Advertising Started");
 }
-//--------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------
 
-bool checkServerStartCondition()
+// === STOP BLE ===
+void stopBLEServer()
 {
-    // Check if the button is pressed
-    if (digitalRead(BUTTON_PIN) == HIGH)
-    {
-        Serial.println("Button pressed, starting BLE server...");
-        return true;
-    }
-    return false;
+    Serial.println("Stopping BLE...");
+    NimBLEDevice::deinit(true); // Frees RAM too
+    bleActive = false;
 }
+
+//-----------------------------------------------------------------------------------------------
+
+// bool checkServerStartCondition()
+// {
+//     // Check if the button is pressed
+//     if (digitalRead(BUTTON_PIN) == HIGH)
+//     {
+//         Serial.println("Button pressed, starting BLE server...");
+//         return true;
+//     }
+//     return false;
+// }
 //----------------------------------------------------------------------------------------
 
 // Function to calculate the distance using the Haversine formula
@@ -597,7 +614,8 @@ void uartTask()
         {
             uartBuffer[uartIndex] = '\0'; // Null terminate
             int value = atoi(uartBuffer);
-            if (value > 200 && value < 20000)
+            //if (value > 200 && value < 20000)
+            if (value < 16000)
             {
                 rpm = value;
             }
@@ -617,14 +635,18 @@ void uartTask()
 
 void setup()
 {
+    pinMode(LED_1, OUTPUT);
+    pinMode(LED_2, OUTPUT);
+    pinMode(LAMBDA_CONTROL_PIN, OUTPUT);
+    pinMode(SEND_RPM_ENABLE_PIN, OUTPUT);
 
     Serial.begin(115200);
-    Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1); // RXD1 = GPIO 25 TXD1 = GPIO 13, slave esp32
+    Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1); // RXD1 = GPIO 27 TXD1 = GPIO 13, slave esp32
     Serial2.begin(9600);                         // TX = GPIO 17 RX = 16, GPS UNIT
     Wire.begin();
-    setupADS();
-    
+    setupADS(); // SETUP ADC
 
+    
     // send configuration data in UBX protocol
     for (int i = 0; i < sizeof(UBLOX_INIT); i++)
     {
@@ -769,66 +791,17 @@ void setup()
     //-----------------------------------------------------------------------
 
     // Initialize the button pin
-    pinMode(START_LOGGING_PIN, INPUT_PULLDOWN);
-    pinMode(BUTTON_PIN, INPUT_PULLDOWN);
-    pinMode(LED_1, OUTPUT);
-    pinMode(LED_2, OUTPUT);
+   
+   
+
 
     // Initial check in setup to see if BLE server should start right away
-    if (checkServerStartCondition())
-    {
+
         startBLEServer();
         isBleServerStarted = true; // Set flag to indicate BLE server has started
-    }
-    else
-    {
-        Serial.println("Condition not met, waiting to start BLE server...");
-    }
-
-    //  used to check the offset of each struct element
-
-    // Serial.print("sizeof(LogRecord) = ");
-    // Serial.println(sizeof(LogRecord));
-
-    // Serial.print("offset of timestamp = ");
-    // Serial.print(offsetof(LogRecord, timestamp));
-    // Serial.print("offset of lat = ");
-    // Serial.println(offsetof(LogRecord, lat));
-    // Serial.print("offset of lng = ");
-    // Serial.println(offsetof(LogRecord, lng));
-    // Serial.print("offset of mph = ");
-    // Serial.println(offsetof(LogRecord, mph));
-    // Serial.print("offset of rpm = ");
-    // Serial.println(offsetof(LogRecord, rpm));
-    // Serial.print("offset of tps = ");
-    // Serial.println(offsetof(LogRecord, tps));
-    // Serial.print("offset of afr = ");
-    // Serial.println(offsetof(LogRecord, afr));
-    // Serial.print("offset of iPressure = ");
-    // Serial.println(offsetof(LogRecord, iPressure));
-    // Serial.print("offset of airTemperature = ");
-    // Serial.println(offsetof(LogRecord, airTemperature));
-    // Serial.print("offset of coolantTemperature = ");
-    // Serial.println(offsetof(LogRecord, coolantTemperature));
-    // Serial.print("offset of oilPressure = ");
-    // Serial.println(offsetof(LogRecord, oilPressure));
-    // Serial.print("offset of bVoltage = ");
-    // Serial.println(offsetof(LogRecord, bVoltage));
-    // Serial.print("offset of spare = ");
-    // Serial.println(offsetof(LogRecord, spare));
-
-    //    readAllStructs("/na0103202522:15.txt");
-
     //----------------------------------------------------------------------------------------
 
-    // // Initialize timer
-    // timer = timerBegin(0, 80, true); // Timer 0, prescaler of 80, count up
-    // timerAttachInterrupt(timer, &onTimer, true);
-    // timerAlarmWrite(timer, 250000, true); // 250ms interval
-    // timerAlarmEnable(timer);
-    //  digitalWrite(LED, HIGH);
 }
-
 void loop()
 {
     static unsigned long lastFastLogTime = 0;
@@ -838,11 +811,12 @@ void loop()
     // Only check and start BLE server if it's not already started
     if (!isBleServerStarted)
     {
-        if (checkServerStartCondition())
-        {
+        // if (checkServerStartCondition())
+        // {
             startBLEServer();          // Start BLE server
             isBleServerStarted = true; // Set the flag to prevent re-calling the function
-        }
+                 // Reset the stopBLEServer flag
+       // }
     }
 
     // Process GPS data
@@ -859,7 +833,7 @@ void loop()
             int year = gps.date.year();
             int hour = gps.time.hour();
             int min = gps.time.minute();
-            makeTimeStamp = false;
+            makeTimeStamp = false; // reset the timestamp flag stops the timestamp from being created again
 
             formattedDay = (day < 10) ? "0" + String(day) : String(day);
             formattedmonth = (month < 10) ? "0" + String(month) : String(month);
@@ -877,7 +851,8 @@ void loop()
             loggerStarted = true;
             setFramHeader(logId.c_str());
             Serial.println(logId);
-            digitalWrite(LED_1, HIGH);
+            digitalWrite(LED_1, HIGH); // LED to show logging is started
+            digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);// tell the slave esp32 to start sending data
         }
     }
 
@@ -904,7 +879,7 @@ void loop()
             record.iPressure = (readSensor(ADS1, 1, 3300.0, 6800.0)); // probably kpa 0-100
             record.airTemperature = (readSensor(ADS2, 2, 3300.0, 6800.0));
             record.coolantTemperature = (readSensor(ADS2, 3, 3300.0, 6800.0));
-            record.oilPressure = (readSensor(ADS1, 3, 10000.0, 2000.0)); // 0
+            record.oilPressure = (readSensor(ADS1, 3, 3300.0, 6800.0)); // 0
             record.bVoltage = (readSensor(ADS2, 1, 49900.0, 10000.0));   // 20 to ? volts battery voltage 49.9k to 10k
             record.spare = (readSensor(ADS1, 0, 3300.0, 6800.0));        // spare
 
@@ -912,15 +887,27 @@ void loop()
         }
     }
 
-    // Serial.println(rpm);
+   //  Serial.println(rpm);
     // Serial.println(readSensor(ADS1, 0, 3300.0, 6800.0)); // 5 to 3.3 volts
-    //  Serial.println(readSensor(ADS1, 0, 9808.0, 1944.0)); // actual values used for testing
-    // Serial.println(readSensor(ADS2, 3, 47000, 10000.0)); 20 to 3.3 volts battery voltag
+    //  Serial.println(readSensor(ADS1, 3, 3300.0, 6800.0)); // oil pressure
+    Serial.println(readSensor(ADS1, 1, 3300, 6800.0)); // spare 2
+    Serial.println(readSensor(ADS1, 0, 3300, 6800.0)); // spare 1
 
-    // Serial.println(readTps(ADS1, 0));
+    // Serial.println(readTps(ADS1, 2));
     // val = map(val, 0, 32, 0, 100);
     // Serial.print("Sensor value: ");
     // Serial.println(val);
+    // Serial.print("Battery: ");
+    // Serial.println(readSensor(ADS2, 1, 49900.0, 10000.0)); // BATT VOLTAGE TEST
+    // Serial.print("AFR Voltage ");
+    // Serial.println(readSensor(ADS2, 0, 3300.0, 6800.0)); // AFR VOLTAGE TEST
+    // Serial.print("Air Temp Voltage ");
+    // Serial.println(readSensor(ADS2, 2, 3300.0, 6800.0)); // AFR VOLTAGE TEST
 
-    Serial.println(readSensor(ADS2, 1, 49900.0, 10000.0));// BATT VOLTAGE TEST
+
+    digitalWrite(LED_2, HIGH);// just showing the loop is running
+    digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);
+    // digitalWrite(LAMBDA_CONTROL_PIN, HIGH);
+    uartTask(); // TEMP, remove later?
+  
 }

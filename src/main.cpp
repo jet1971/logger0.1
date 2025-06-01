@@ -11,6 +11,9 @@
 #include <LittleFS.h>
 #include "LittleFSHandler.h"
 #include "StructSizeOffset.h"
+#include "LogRecord.h"
+#include "UartTask.h"
+#include "LapTimer.h"
 
 
 #define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
@@ -28,6 +31,12 @@ bool loggingStarted = false;
 // const uint8_t tachoInput = 4; // Tacho input pin
 #define TXD1 13 // Custom UART TX pin
 #define RXD1 27 // Custom UART RX pin
+
+//LapTimer lapTimer(53.738728, -2.473479, 53.738616, -2.473487, 6.0, 10000);// work
+
+LapTimer lapTimer(53.723057, -2.465386, 53.722933, -2.465327, 6.0, 10000);// Aster chase
+
+LapTimer lapTimer(53.714574, -2.475667, 53.714570, -2.475778, 6.0, 10000); // Services, left at roundabout up to next roundabout
 
 uint8_t FRAM_CS = 33; // Chip select pin for FRAM CS1
 //uint8_t FRAM_CS = 32; // Chip select pin for FRAM CS2
@@ -56,7 +65,7 @@ size_t currentFilePosition = 0; // Track the current position in the file
 size_t fileSize = 0;
 bool makeTimeStamp = true; // currently used to identify Log files
 TinyGPSPlus gps;
-
+String  id = "BIKE1";
 String formattedDay;
 String formattedmonth;
 String formattedHour;
@@ -67,26 +76,10 @@ bool loggerStarted = false;
 // Header at FRAM address 0
 struct FramLogHeader
 {
-    char fileName[36];
+    char fileName[32]; // File name
     u_int32_t dataLength;
 };
 
-// struct LogRecord
-// {
-//     uint32_t timestamp;
-//     float lat;
-//     float lng;
-//     uint16_t mph; // speed x 10
-//     uint16_t rpm;
-//     uint8_t tps;                // throttle position sensor
-//     uint8_t afr;                // lambda x 10
-//     uint8_t iPressure;          // intake pressure use MPX5100DP, 0-14.5PSI OR 0 TO 100KPA Tranmit in KPA
-//     uint8_t airTemperature;     // air temp
-//     uint8_t coolantTemperature; // coolant temp
-//     uint8_t oilPressure;        //  oil pressure
-//     uint8_t bVoltage;           // battery voltage x 10
-//     uint8_t spare;              // spare
-// };
 
 static const size_t HEADER_ADDRESS = 0x00;
 static const uint32_t DATA_START = sizeof(FramLogHeader);
@@ -100,11 +93,13 @@ uint32_t currentDataAddress = DATA_START;
 // buffer stuff -------------------------------------------------------------------------
 
 String logId = "";
+//String logId = "/na0103202622:15.txt";// DUMMY FOR NONE GPS TESTING
+                 
 
-u_int32_t rpm;
+    // u_int32_t rpm;
 
-// logging times-----------------------------------------------------------------------
-unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
+    // logging times-----------------------------------------------------------------------
+    unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
 unsigned long previousMillis1 = 0;
 unsigned long previousMillis2 = 0;
 unsigned long lastTempTime2 = 0;
@@ -358,8 +353,7 @@ void stopSerial1and2ForBLE()
 {
     Serial1.end();
     delay(200);
-    Serial2.end(); // Turn off Serial2 to free CPU time
-                   // checkSerial1and2Status();
+    Serial2.end(); // Turn off Serial2 to free CPU time                  // checkSerial1and2Status();
     delay(200);
 }
 
@@ -539,98 +533,6 @@ void flushRingToFram()
     fram.writeEnable(false);
 }
 
-LogRecord readRecord;
-
-void readAllStructs(const char *filename)
-{
-    File file = LittleFS.open(filename, FILE_READ);
-    if (!file)
-    {
-        Serial.println("Failed to open file for reading");
-        return;
-    }
-
-    while (true)
-    {
-        // Attempt to read one struct
-        size_t bytesRead = file.readBytes((char *)&readRecord, sizeof(readRecord));
-        if (bytesRead < sizeof(readRecord))
-        {
-            // either EOF or partial read
-            if (bytesRead > 0)
-            {
-                Serial.println("Warning: partial struct read, file may be truncated!");
-            }
-            break; // done reading
-        }
-
-        // Print or process the struct
-        // Serial.print("=== Entry ===  ");
-        Serial.print("timestamp: ");
-        Serial.println(readRecord.timestamp);
-        Serial.print(", lat: ");
-        Serial.print(readRecord.lat, 6);
-        Serial.print(", lng: ");
-        Serial.print(readRecord.lng, 6);
-        Serial.print(", mph: ");
-        Serial.print(readRecord.mph / 10.0);
-        Serial.print(", rpm: ");
-        Serial.print(readRecord.rpm);
-        Serial.print(", tps: ");
-        Serial.println(readRecord.tps);
-        Serial.print(", AFR: ");
-        Serial.print(readRecord.afr);
-        Serial.print(", iPressure: ");
-        Serial.print(readRecord.iPressure);
-        Serial.print(", airTemperature: ");
-        Serial.print(readRecord.airTemperature);
-        Serial.print(", coolantTemperature: ");
-        Serial.print(readRecord.coolantTemperature);
-        Serial.print(", oilPressure: ");
-        Serial.print(readRecord.oilPressure);
-        Serial.print(", bVoltage: ");
-        Serial.println(readRecord.bVoltage);
-        Serial.print(", spare: ");
-        Serial.println(readRecord.spare);
-        Serial.println();
-    }
-
-    file.close();
-}
-
-//------------------------------------------------------------------------------------------------
-//                      This is getting the rpm from the slave esp32
-
-char uartBuffer[16];
-uint8_t uartIndex = 0;
-
-void uartTask()
-{
-    while (Serial1.available())
-    {
-        char incoming = Serial1.read();
-
-        if (incoming == '\n')
-        {
-            uartBuffer[uartIndex] = '\0'; // Null terminate
-            int value = atoi(uartBuffer);
-            //if (value > 200 && value < 20000)
-            if (value < 16000)
-            {
-                rpm = value;
-            }
-            uartIndex = 0; // Reset for next message
-        }
-        else if (uartIndex < sizeof(uartBuffer) - 1)
-        {
-            uartBuffer[uartIndex++] = incoming;
-        }
-        else
-        {
-            uartIndex = 0; // Overflow, reset
-        }
-    }
-}
 //------------------------------------------------------------------------------------------------
 
 void setup()
@@ -642,6 +544,7 @@ void setup()
 
     Serial.begin(115200);
     Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1); // RXD1 = GPIO 27 TXD1 = GPIO 13, slave esp32
+    Serial1.setRxBufferSize(256);                // Optional: bigger internal UART buffer
     Serial2.begin(9600);                         // TX = GPIO 17 RX = 16, GPS UNIT
     Wire.begin();
     setupADS(); // SETUP ADC
@@ -790,77 +693,86 @@ void setup()
     // fsHandler.listFiles(); // List all files in LittleFS
     //-----------------------------------------------------------------------
 
-    // Initialize the button pin
-   
-   
-
-
-    // Initial check in setup to see if BLE server should start right away
-
         startBLEServer();
         isBleServerStarted = true; // Set flag to indicate BLE server has started
     //----------------------------------------------------------------------------------------
 
 }
+
+const int numReadings = 50; // Number of readings to average
+double afrReadings[numReadings] = {0}; // Array to store readings
+int afrIndex = 0; // Current index in the array
+double afrSum = 0; // Sum of all readings
+double afrAverage = 0; // Average AFR voltage
+
+
+
+
 void loop()
 {
     static unsigned long lastFastLogTime = 0;
     static unsigned long lastRead = 0;
     static int skipEntries = 20; // Counter to skip the first twenty entries, 2 seconds worth of data
 
-    // Only check and start BLE server if it's not already started
-    if (!isBleServerStarted)
-    {
-        // if (checkServerStartCondition())
-        // {
-            startBLEServer();          // Start BLE server
-            isBleServerStarted = true; // Set the flag to prevent re-calling the function
-                 // Reset the stopBLEServer flag
-       // }
-    }
 
     // Process GPS data
     if (Serial2.available() > 0)
-    {
+    { 
         gps.encode(Serial2.read());
 
+
         if (gps.location.isUpdated() && makeTimeStamp)
-        {
-            String venue = detectVenue(gps.location.lat(), gps.location.lng());
 
-            int day = gps.date.day();
-            int month = gps.date.month();
-            int year = gps.date.year();
-            int hour = gps.time.hour();
-            int min = gps.time.minute();
-            makeTimeStamp = false; // reset the timestamp flag stops the timestamp from being created again
+            {
+                Serial.println("GPS location updated");
+                String venue = detectVenue(gps.location.lat(), gps.location.lng());
 
-            formattedDay = (day < 10) ? "0" + String(day) : String(day);
-            formattedmonth = (month < 10) ? "0" + String(month) : String(month);
-            formattedHour = (hour < 10) ? "0" + String(hour) : String(hour);
-            formattedMin = (min < 10) ? "0" + String(min) : String(min);
+                int day = gps.date.day();
+                int month = gps.date.month();
+                int year = gps.date.year();
+                int hour = gps.time.hour();
+                int min = gps.time.minute();
+                makeTimeStamp = false; // reset the timestamp flag stops the timestamp from being created again
 
-            logId = "/" + venue + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
-            Serial.print("First print of logID = ");
-            Serial.println(logId);
-        }
+                formattedDay = (day < 10) ? "0" + String(day) : String(day);
+                formattedmonth = (month < 10) ? "0" + String(month) : String(month);
+                formattedHour = (hour < 10) ? "0" + String(hour) : String(hour);
+                formattedMin = (min < 10) ? "0" + String(min) : String(min);
 
-        if (!loggerStarted && gps.location.isUpdated())
-        {
-            Serial.println("Logging started");
-            loggerStarted = true;
-            setFramHeader(logId.c_str());
-            Serial.println(logId);
-            digitalWrite(LED_1, HIGH); // LED to show logging is started
-            digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);// tell the slave esp32 to start sending data
-        }
+                logId = "/" + venue + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
+               // logId = "/" + venue + id + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
+                Serial.print("First print of logID = ");
+                Serial.println(logId);
+            }
+
+        if (!loggerStarted && gps.location.isUpdated() && gps.speed.mph() > SPEED_THRESHOLD)
+           // if (!loggerStarted)
+            {
+                Serial.println("Logging started");
+                loggerStarted = true;
+                setFramHeader(logId.c_str());
+                Serial.println(logId);
+                digitalWrite(LED_1, HIGH);               // LED to show logging is started
+                digitalWrite(SEND_RPM_ENABLE_PIN, HIGH); // tell the slave esp32 to start sending data
+                digitalWrite(LAMBDA_CONTROL_PIN, HIGH); // TEMP, CONTROL BY ENGINE TEMPERATURE LATER 
+                stopBLEServer();                         // Stop BLE server to free up CPU time
+                Serial.println("Stopping BLE server to free up CPU time");
+            }
     }
-
+    
     // Fast logging interval
-    if (loggerStarted && millis() - lastFastLogTime >= fastLoggingInterval)
+    if (loggerStarted && gps.location.isValid() && millis() - lastFastLogTime >= fastLoggingInterval)
     {
         lastFastLogTime = millis();
-        uartTask(); // get rpm data
+        double lat = gps.location.lat();
+        double lon = gps.location.lng();
+        uint32_t now = millis();
+
+        if (lapTimer.checkLap(lat, lon, now))
+        {
+            Serial.print("Lap complete! Time: ");
+            Serial.println(lapTimer.getLastLapTime());
+        }
 
         // Skip the first xxxx entries
         if (skipEntries > 0)
@@ -874,40 +786,59 @@ void loop()
             record.lng = gps.location.lng();
             record.mph = gps.speed.mph() * 10;
             record.rpm = rpm;
-            record.tps = (readTps(ADS1, 2));                          // 0-100% throttle position sensor
-            record.afr = (readSensor(ADS2, 0, 3300.0, 6800.0));       // 132;     132 = 13.2:1
+            record.tps = (readTps(ADS1, 2)); // 0-100% throttle position sensor
+            record.afr = (mapLambda(ADS2, 0, 3300.0, 6800.0));
             record.iPressure = (readSensor(ADS1, 1, 3300.0, 6800.0)); // probably kpa 0-100
             record.airTemperature = (readSensor(ADS2, 2, 3300.0, 6800.0));
             record.coolantTemperature = (readSensor(ADS2, 3, 3300.0, 6800.0));
             record.oilPressure = (readSensor(ADS1, 3, 3300.0, 6800.0)); // 0
-            record.bVoltage = (readSensor(ADS2, 1, 49900.0, 10000.0));   // 20 to ? volts battery voltage 49.9k to 10k
-            record.spare = (readSensor(ADS1, 0, 3300.0, 6800.0));        // spare
+            record.bVoltage = (readSensor(ADS2, 1, 49900.0, 10000.0));  // 20 to ? volts battery voltage 49.9k to 10k
+            record.spare = (readSensor(ADS1, 0, 3300.0, 6800.0));       // spare
 
             flushRingToFram();
         }
     }
 
-   //  Serial.println(rpm);
+   // Serial.println((mapLambda(ADS2, 0, 3300.0, 6800.0)));
+
+    // Serial.println(rpm);
     // Serial.println(readSensor(ADS1, 0, 3300.0, 6800.0)); // 5 to 3.3 volts
     //  Serial.println(readSensor(ADS1, 3, 3300.0, 6800.0)); // oil pressure
-    Serial.println(readSensor(ADS1, 1, 3300, 6800.0)); // spare 2
-    Serial.println(readSensor(ADS1, 0, 3300, 6800.0)); // spare 1
+    // Serial.println(readSensor(ADS1, 1, 3300, 6800.0)); // spare 2
 
-    // Serial.println(readTps(ADS1, 2));
-    // val = map(val, 0, 32, 0, 100);
-    // Serial.print("Sensor value: ");
-    // Serial.println(val);
+    //----------------------------------------------------------------------------------
+    // Serial.println(ADS1.readADC(2));                                // read the raw value from the TPS ADC
+    // Serial.println(readSensor(ADS1, 2, 3300, 6800.0));                       // TPS VOLTAGE
+    // Serial.println(readTps(ADS1, 2));                                         // TPS VALUE
+    //------------------------------------------------------------------------------------
+
     // Serial.print("Battery: ");
-    // Serial.println(readSensor(ADS2, 1, 49900.0, 10000.0)); // BATT VOLTAGE TEST
+    //  Serial.println(readSensor(ADS2, 1, 49900.0, 10000.0)); // BATT VOLTAGE TEST
     // Serial.print("AFR Voltage ");
     // Serial.println(readSensor(ADS2, 0, 3300.0, 6800.0)); // AFR VOLTAGE TEST
     // Serial.print("Air Temp Voltage ");
-    // Serial.println(readSensor(ADS2, 2, 3300.0, 6800.0)); // AFR VOLTAGE TEST
 
+    //------------------------------------------------------------------------------------------------
+    // Read AFR voltage and calculate average
+    //     double afrVoltage = readAndCompensate(ADS2, 0, 3300.0, 6800.0); // AFR voltage reading
+    //     afrSum -= afrReadings[afrIndex];                                // Subtract the oldest reading from the sum
+    //     afrReadings[afrIndex] = afrVoltage;                             // Store the new reading
+    //     afrSum += afrVoltage;                                           // Add the new reading to the sum
+    //     afrIndex = (afrIndex + 1) % numReadings;                        // Move to the next index (circular buffer)
+    //     afrAverage = afrSum / numReadings;                              // Calculate the average
+    //    // Print the average AFR voltage
+    //   //  Serial.print("AFR Voltage (Average): ");
 
-    digitalWrite(LED_2, HIGH);// just showing the loop is running
+    //     float exp_afr = (mapLambda(ADS2, 0, 3300.0, 6800.0));
+    //     exp_afr = 0.02 * exp_afr + (1.0 - 0.01) * exp_afr;
+    //     Serial.print(exp_afr,0);
+
+    //     Serial.print("      ");
+    //     Serial.println(afrAverage, 2); // Print with 2 decimal places
+    //-------------------------------------------------------------------------------------------------
+    // digitalWrite(LED_1, HIGH);
+    digitalWrite(LED_2, HIGH); // just showing the loop is running
     digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);
     // digitalWrite(LAMBDA_CONTROL_PIN, HIGH);
     uartTask(); // TEMP, remove later?
-  
 }

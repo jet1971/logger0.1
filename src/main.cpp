@@ -4,7 +4,6 @@
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
 #include "freertos/task.h"
-#include "Adafruit_FRAM_SPI.h"
 #include <Wire.h>
 
 #include "ADS1115Module.h"
@@ -14,6 +13,9 @@
 #include "LogRecord.h"
 #include "UartTask.h"
 #include "LapTimer.h"
+#include "DetectVenue.h" 
+#include "FramLogHeader.h"
+#include "FRAMModule.h" 
 
 
 #define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
@@ -36,7 +38,7 @@ bool loggingStarted = false;
 
 LapTimer lapTimer(53.723057, -2.465386, 53.722933, -2.465327, 6.0, 10000);// Aster chase
 
-LapTimer lapTimer(53.714574, -2.475667, 53.714570, -2.475778, 6.0, 10000); // Services, left at roundabout up to next roundabout
+//LapTimer lapTimer(53.714574, -2.475667, 53.714570, -2.475778, 6.0, 10000); // Services, left at roundabout up to next roundabout
 
 uint8_t FRAM_CS = 33; // Chip select pin for FRAM CS1
 //uint8_t FRAM_CS = 32; // Chip select pin for FRAM CS2
@@ -65,7 +67,11 @@ size_t currentFilePosition = 0; // Track the current position in the file
 size_t fileSize = 0;
 bool makeTimeStamp = true; // currently used to identify Log files
 TinyGPSPlus gps;
-String  id = "BIKE1";
+
+String  id = "BK1"; //MAKE EDITABLE IN APP LATER, MUST BE THREE CHARACTERS
+String version = "1"; //STRUCT VERSION, NOT USED YET, ANY CHARACTER, ONE CHARACTER MAXIMUM
+String fastestLapNumber = "00"; // These numbers are place holders until updated by the LapTimer function, Fastest lap number, used to identify the fastest lap, MUST BE TWO CHARACTERS
+String fastestLapTime = "0000000"; // These numbers are place holders until updated by the LapTimer function, Fastest lap time in milliseconds, used to identify the fastest lap, // MUST BE SEVEN CHARACTERS
 String formattedDay;
 String formattedmonth;
 String formattedHour;
@@ -73,15 +79,7 @@ String formattedMin;
 
 bool loggerStarted = false;
 
-// Header at FRAM address 0
-struct FramLogHeader
-{
-    char fileName[32]; // File name
-    u_int32_t dataLength;
-};
-
-
-static const size_t HEADER_ADDRESS = 0x00;
+const size_t HEADER_ADDRESS = 0x00;
 static const uint32_t DATA_START = sizeof(FramLogHeader);
 
 FramLogHeader header;
@@ -438,58 +436,6 @@ void stopBLEServer()
 // }
 //----------------------------------------------------------------------------------------
 
-// Function to calculate the distance using the Haversine formula
-double haversine(double lat1, double lon1, double lat2, double lon2)
-{
-    const double R = 6371000; // Earth's radius in meters
-    double dLat = (lat2 - lat1) * (M_PI / 180.0);
-    double dLon = (lon2 - lon1) * (M_PI / 180.0);
-
-    lat1 = lat1 * (M_PI / 180.0);
-    lat2 = lat2 * (M_PI / 180.0);
-
-    double a = sin(dLat / 2) * sin(dLat / 2) +
-               cos(lat1) * cos(lat2) *
-                   sin(dLon / 2) * sin(dLon / 2);
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return R * c; // Distance in meters
-}
-
-String detectVenue(float currentLatitude, float currentLongitude)
-{
-
-    // Cadwell startline coords ish.. 53.310269, -0.059400
-    // float cadwel_lat = 53.310269;
-    // float cadwel_lng = -0.059400;
-    // float perimeter = 0.1000;
-
-    const double tolerance = 75.0;
-
-    // const double targetLatitude = 53.722850;
-    // const double targetLongitude = -2.467709; // Home coords ish fudged
-
-    const double targetLatitude = 53.738324;
-    const double targetLongitude = -2.473829; // work coords
-
-    delay(1000); // time for gps to stabilize for venue lock
-
-    // Calculate distance to the target coordinates
-    double distance = haversine(currentLatitude, currentLongitude, targetLatitude, targetLongitude);
-
-    // Check if within the tolerance
-    if (distance <= tolerance)
-    {
-        // Trigger lap completion logic
-        Serial.println("Work...");
-        return "wo";
-    }
-    else
-    {
-        Serial.println("Not at the finish line.");
-        return "na";
-    }
-}
 
 void setFramHeader(const char *name)
 {
@@ -516,15 +462,15 @@ void flushRingToFram()
 {
     fram.writeEnable(true);
     fram.write(currentDataAddress, (uint8_t *)&record, sizeof(record));
-
     // uint8_t *bytePtr = (uint8_t *)&record;
     // Serial.println("Raw bytes of record just written:");
     // for (int i = 0; i < sizeof(record); i++)
     // {
     //     Serial.printf("Byte[%d] = %u\n", i, bytePtr[i]);
     // }
-
     fram.writeEnable(false);
+
+
     currentDataAddress += sizeof(record);
     header.dataLength += sizeof(record);
 
@@ -739,8 +685,8 @@ void loop()
                 formattedHour = (hour < 10) ? "0" + String(hour) : String(hour);
                 formattedMin = (min < 10) ? "0" + String(min) : String(min);
 
-                logId = "/" + venue + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
-               // logId = "/" + venue + id + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
+               // logId = "/" + venue + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
+                logId = "/" + venue + id + version + fastestLapNumber + fastestLapTime + formattedHour + formattedMin + formattedDay + formattedmonth + String(year) + ".txt";
                 Serial.print("First print of logID = ");
                 Serial.println(logId);
             }
@@ -768,11 +714,13 @@ void loop()
         double lon = gps.location.lng();
         uint32_t now = millis();
 
-        if (lapTimer.checkLap(lat, lon, now))
-        {
-            Serial.print("Lap complete! Time: ");
-            Serial.println(lapTimer.getLastLapTime());
-        }
+        lapTimer.checkLap(lat, lon, now);
+
+        // if (lapTimer.checkLap(lat, lon, now))
+        // {     
+        //     Serial.print("Lap complete! Time: ");
+        //     Serial.println(lapTimer.getLastLapTime()); // or maybe light a led or something?
+        // }
 
         // Skip the first xxxx entries
         if (skipEntries > 0)

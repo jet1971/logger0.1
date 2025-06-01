@@ -1,26 +1,13 @@
-// #ifndef FRAMMODULE_H
-// #define FRAMMODULE_H
+#pragma once
+#include <Adafruit_FRAM_SPI.h>
 
-// #include "Adafruit_FRAM_SPI.h"
-// #include "LogRecord.h"
+// Pin configuration
+extern uint8_t FRAM_CS;
+extern uint8_t FRAM_SCK;
+extern uint8_t FRAM_MISO;
+extern uint8_t FRAM_MOSI;
 
-// // Define FRAM pins and objects
-// extern Adafruit_FRAM_SPI fram;
-// extern const size_t HEADER_ADDRESS;
-// extern const uint32_t DATA_START;
-
-// extern const uint8_t addrSizeInBytes; // Default to address size three bytes
-
-// struct FramLogHeader
-// {
-//     char fileName[36];
-//     uint32_t dataLength;
-// };
-
-
-
-// bool initFRAM();
-// void setFramHeader(const char *name);
-// void flushRecordToFRAM(const LogRecord record);
-
-// #endif // FRAMMODULE_H
+// FRAM object
+extern Adafruit_FRAM_SPI fram;
+extern uint8_t addrSizeInBytes;
+extern const size_t HEADER_ADDRESS;

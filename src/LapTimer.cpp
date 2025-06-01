@@ -1,4 +1,30 @@
 #include "LapTimer.h"
+#include "FramLogHeader.h"
+#include "FRAMModule.h"
+
+bool LapTimer::updateFramFilenameIfNewBest(char *fileName, size_t length)
+{
+    if (length < 36)
+        return false; // Safety check: prevent overflow
+
+    // Convert fastest lap number and time to 2-digit and 6-digit strings
+    char lapNumStr[3];
+    snprintf(lapNumStr, sizeof(lapNumStr), "%02u", fastestLapNumber);// format fastestLapNumber as 2-digit string, copy to lapNumStr array(buffer)
+
+    char lapTimeStr[8];
+    snprintf(lapTimeStr, sizeof(lapTimeStr), "%07lu", fastestLapTime);
+
+    // Copy into positions 7–8 and 9–14 (0-based index)
+    memcpy(&fileName[6], lapNumStr, 2);  // Best Lap Number: pos 7–8, (6 in 0-based index)
+    memcpy(&fileName[8], lapTimeStr, 7); // Best Lap Time: pos 9–15, (8 in 0-based index)
+
+    fram.writeEnable(true);
+    fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // Update the header 
+    fram.writeEnable(false);
+
+    return true;
+}
+
 
 LapTimer::LapTimer(double lat1, double lon1, double lat2, double lon2, double triggerDistance, uint32_t debounceMs)
     : lineLat1(lat1), lineLon1(lon1), lineLat2(lat2), lineLon2(lon2),
@@ -161,10 +187,18 @@ bool LapTimer::checkLap(double lat, double lon, uint32_t timestamp)
             wasOverLine = true;
 
             lapNumber++;
-            if (lapNumber < MAX_LAPS)
+
+            if (lastLapTime < fastestLapTime)
             {
-                lapTimes[lapNumber - 1] = lastLapTime;
+                fastestLapTime = lastLapTime; // Update fastest lap time
+                fastestLapNumber = lapNumber; // Update fastest lap number
+                updateFramFilenameIfNewBest(header.fileName, sizeof(header.fileName));
             }
+        
+
+
+
+        
 
             // Debug: Print lap details
             Serial.println("Lap crossed!");
@@ -174,12 +208,15 @@ bool LapTimer::checkLap(double lat, double lon, uint32_t timestamp)
             Serial.println(lastLapTime);
             Serial.print("Total laps: ");
             Serial.println(lapNumber);
-            Serial.print("Lap times: ");
-            for (uint8_t i = 0; i < lapNumber; i++)
-            {
-                Serial.print(lapTimes[i]);
-                Serial.print(" ");
-            }
+            Serial.print("Best Lap time: ");
+            Serial.println(fastestLapTime);
+            Serial.print("Best Lap number: ");
+            Serial.println(fastestLapNumber);
+            Serial.print("Current Timestamp: ");
+            Serial.println(timestamp);
+            Serial.print("Last Lap Start: ");
+            Serial.println(lastLapStart);
+          
             Serial.println();
 
             wasOverLine = false; // Reset after processing the lap

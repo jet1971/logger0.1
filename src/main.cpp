@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
 #include "freertos/task.h"
 #include <Wire.h>
+#include <nvs_flash.h> // Include the header for NVS functions
+#include <ArduinoJson.h>
+#include <Ticker.h>
 
 #include "ADS1115Module.h"
 #include <LittleFS.h>
@@ -13,50 +15,45 @@
 #include "LogRecord.h"
 #include "UartTask.h"
 #include "LapTimer.h"
-#include "DetectVenue.h" 
+#include "DetectVenue.h"
+#include "FRAMModule.h"
+#include "Settings.h"
+#include "TemperatureFunction.h"
+#include "AirTemperatureFunction.h"
+#include "LoggerTask.h"
+#include "FramFunctions.h"
 #include "FramLogHeader.h"
-#include "FRAMModule.h" 
+#include "MainShared.h"
+#include "GPSTask.h"
+#include "Tacho.h"
 
+
+Ticker liveDataTicker; // used for sending live data
+bool liveDataStreaming = false;
 
 #define CHUNK_SIZE 500 // 512 causes corrupted data, 500 seems to work
 
 bool bleActive = true;
-bool loggingStarted = false;
-
-#define SPEED_THRESHOLD 10.0 // mph
-
-#define LED_1 14
-#define LED_2 2
-#define LAMBDA_CONTROL_PIN 25
-#define SEND_RPM_ENABLE_PIN 26
 
 // const uint8_t tachoInput = 4; // Tacho input pin
-#define TXD1 13 // Custom UART TX pin
-#define RXD1 27 // Custom UART RX pin
+#define TXD1 27 // Custom UART TX pin
+#define RXD1 13 // Custom UART RX pin
 
-//LapTimer lapTimer(53.738728, -2.473479, 53.738616, -2.473487, 6.0, 10000);// work
-
-LapTimer lapTimer(53.723057, -2.465386, 53.722933, -2.465327, 6.0, 10000);// Aster chase
-
-//LapTimer lapTimer(53.714574, -2.475667, 53.714570, -2.475778, 6.0, 10000); // Services, left at roundabout up to next roundabout
-
-uint8_t FRAM_CS = 33; // Chip select pin for FRAM CS1
-//uint8_t FRAM_CS = 32; // Chip select pin for FRAM CS2
-uint8_t FRAM_SCK = 18;
-uint8_t FRAM_MISO = 19;
-uint8_t FRAM_MOSI = 23;
-
-Adafruit_FRAM_SPI fram = Adafruit_FRAM_SPI(FRAM_SCK, FRAM_MISO, FRAM_MOSI, FRAM_CS);
-uint8_t addrSizeInBytes = 3; // Default to address size three bytes
+// #define TXD1 13 // Custom UART TX pin
+// #define RXD1 27 // Custom UART RX pin
 
 bool isBleServerStarted = false; // Flag to check if BLE server is already started
 
 LittleFSHandler fsHandler; // Create an instance of the handler
 String gpsCoords;
 
+// Preferences preferences; // Preferences instance for storing logger settings
+
 static NimBLEServer *pServer;
 static NimBLECharacteristic *pReadFileCharacteristic;
 static NimBLECharacteristic *pDeleteFileCharacteristic;
+NimBLECharacteristic *pLiveDataCharacteristic = nullptr;
+
 bool isSending = false;
 bool fileNameSet = false;
 File file;
@@ -65,51 +62,21 @@ int bytesRead = 0;
 bool acknowledgmentReceived = true;
 size_t currentFilePosition = 0; // Track the current position in the file
 size_t fileSize = 0;
-bool makeTimeStamp = true; // currently used to identify Log files
-TinyGPSPlus gps;
 
-String  id = "BK1"; //MAKE EDITABLE IN APP LATER, MUST BE THREE CHARACTERS
-String version = "1"; //STRUCT VERSION, NOT USED YET, ANY CHARACTER, ONE CHARACTER MAXIMUM
-String fastestLapNumber = "00"; // These numbers are place holders until updated by the LapTimer function, Fastest lap number, used to identify the fastest lap, MUST BE TWO CHARACTERS
-String fastestLapTime = "0000000"; // These numbers are place holders until updated by the LapTimer function, Fastest lap time in milliseconds, used to identify the fastest lap, // MUST BE SEVEN CHARACTERS
-String formattedDay;
-String formattedmonth;
-String formattedHour;
-String formattedMin;
+// logging times-----------------------------------------------------------------------
+// unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
+// unsigned long previousMillis1 = 0;
+// unsigned long previousMillis2 = 0;
+// unsigned long lastTempTime2 = 0;
 
-bool loggerStarted = false;
+// unsigned long lastGpsLogTime = 0; // For tracking GPS logging
+// unsigned long lastRpmLogTime = 0; // For tracking RPM logging
+// const unsigned long slowLogginginterval = 1250;
 
-const size_t HEADER_ADDRESS = 0x00;
-static const uint32_t DATA_START = sizeof(FramLogHeader);
+// const unsigned long tempLogInterval2 = 100;
 
-FramLogHeader header;
-FramLogHeader header2;
-LogRecord record;
-
-uint32_t currentDataAddress = DATA_START;
-
-// buffer stuff -------------------------------------------------------------------------
-
-String logId = "";
-//String logId = "/na0103202622:15.txt";// DUMMY FOR NONE GPS TESTING
-                 
-
-    // u_int32_t rpm;
-
-    // logging times-----------------------------------------------------------------------
-    unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
-unsigned long previousMillis1 = 0;
-unsigned long previousMillis2 = 0;
-unsigned long lastTempTime2 = 0;
-
-unsigned long lastGpsLogTime = 0; // For tracking GPS logging
-unsigned long lastRpmLogTime = 0; // For tracking RPM logging
-const unsigned long slowLogginginterval = 1250;
-const unsigned long fastLoggingInterval = 100;
-const unsigned long tempLogInterval2 = 100;
-
-const unsigned long gpsLogInterval = 100;
-const unsigned long rpmLogInterval = 100;
+// const unsigned long gpsLogInterval = 100;
+// const unsigned long rpmLogInterval = 100;
 
 //--------------------------------------------------------------------------------------------------------
 const char UBLOX_INIT[] PROGMEM = {
@@ -324,6 +291,154 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
         }
     }
 };
+void sendEngineTemeperatureCalibration(NimBLECharacteristic *pCharacteristic)
+{
+    JsonDocument doc;
+    doc["V0"] = voltagePoints[0];
+    doc["V1"] = voltagePoints[1];
+    doc["V2"] = voltagePoints[2];
+    doc["V3"] = voltagePoints[3];
+    doc["V4"] = voltagePoints[4];
+    doc["V5"] = voltagePoints[5];
+    doc["V6"] = voltagePoints[6];
+    // Serialize the entire JSON object
+    String jsonString;
+    serializeJson(doc, jsonString);
+    pCharacteristic->setValue(jsonString);
+    pCharacteristic->notify();
+}
+
+void sendLoggerSettings(NimBLECharacteristic *pCharacteristic)
+{
+    JsonDocument doc;
+    doc["LoggerId"] = loggerId;
+    doc["daylightSaving"] = daylightSaving; // send these values back so they can be seen in UI
+    doc["rpmMultiplier"] = rpmMultiplier;   // NOT SURE CHECK APP IF IT USES RETURNED VALUE   //RPM FUNCTION HIDDING IN UART TASK!!
+    doc["tpsMin"] = tpsMin;                 // DON'T NEED TO RETURN THIS VALUE??
+    doc["tpsMax"] = tpsMax;                 // DON'T NEED TO RETURN THIS VALUE??
+    // Serialize the entire JSON object
+    String jsonString;
+    serializeJson(doc, jsonString);
+    pCharacteristic->setValue(jsonString);
+    pCharacteristic->notify();
+}
+
+class LoggerSettingsCallback : public NimBLECharacteristicCallbacks
+{
+    void onWrite(NimBLECharacteristic *pCharacteristic) override
+    {
+
+        std::string value = pCharacteristic->getValue();
+
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, value);
+
+        if (error)
+        {
+            Serial.println("❌ JSON parse error");
+            return;
+        }
+
+        const char *cmd = doc["cmd"];
+        if (!cmd)
+        {
+            Serial.println("❌ No 'cmd' field");
+            return;
+        }
+
+        if (strcmp(cmd, "GET_SETTINGS") == 0) // SEND THE CURRECT SETTINGS BACK TO GUI
+        {
+            sendLoggerSettings(pCharacteristic);
+        }
+
+        else if (strcmp(cmd, "SAVE_SETTINGS") == 0) // INCOMING DATA TO BE SET IN MEMORY AND SAVED TO PREFERENCES
+        {
+            loggerId = doc["loggerId"].as<String>();
+            if (loggerId.length() != 3)
+            {
+                Serial.println("Logger ID must be exactly 3 characters long.");
+                return;
+            }
+
+            daylightSaving = doc["daylightSaving"].as<bool>();
+            rpmMultiplier = doc["rpmMultiplier"].as<int>(); // RPM FUNCTION HIDDING IN UART TASK!!
+            tpsMin = doc["minRawTPS"].as<int>();
+            tpsMax = doc["maxRawTPS"].as<int>();
+            saveLoggerSettings(); // Write data to preferences (in settings.cpp)
+        }
+        else if (strcmp(cmd, "GET_E_T_C") == 0) // ENGINE TEMPERATURE CALIBRATION, SEND BACK TO GUI
+        {
+            sendEngineTemeperatureCalibration(pCharacteristic);
+        }
+        else if (strcmp(cmd, "SAVE_E_T_C") == 0)
+        {
+            voltagePoints[0] = doc["V0"].as<float>(); // Put these values in memory
+            voltagePoints[1] = doc["V1"].as<float>();
+            voltagePoints[2] = doc["V2"].as<float>();
+            voltagePoints[3] = doc["V3"].as<float>();
+            voltagePoints[4] = doc["V4"].as<float>();
+            voltagePoints[5] = doc["V5"].as<float>();
+            voltagePoints[6] = doc["V6"].as<float>();
+            saveEngineTemperatureCalibration(); // Write data to preferences (in TemperatureFuntion.cpp)
+        }
+        else
+        {
+            Serial.print("⚠️ Unknown cmd: ");
+            Serial.println(cmd);
+        }
+    }
+};
+
+void sendLiveData()
+{
+
+    // Serial.println("⚡ Starting live data stream");
+
+    if (pLiveDataCharacteristic == nullptr)
+    {
+        Serial.println("❌ Live data characteristic is NULL!");
+        return;
+    }
+
+    JsonDocument doc;
+    doc["tps"] = (readTps(ADS1, 3));
+    doc["rpm"] = rpm;
+    doc["rawTps"] = (ADS1.readADC(3));
+    doc["bVolts"] = (readSensorFiltered(ADS2, 0, 51900.0, 10000.0)); // FUDGED VALUE (51900, RESISTOR IS 49900)??
+    doc["lambda"] = (zeitronixLambda(ADS1, 1, 3300.0, 6800.0));      // USING SPARE 1
+    // doc["lambda"] = (mapLambda(ADS2, 0, 3300.0, 6800.0));
+    doc["engineTemp"] = (interpolateEngineTemperature(ADS2, 3, 100000.0, 100000.0)); // Engine temperature,  USING SPARE 2
+    doc["engineTempVolts"] = (readAndCompensate(ADS2, 3, 100000.0, 100000.0));       // ENGINE TEMPERATURE SENSOR VOLTAGE
+    doc["airTemp"] = (interpolateAirTemperature(ADS2, 2));
+
+    String output;
+
+    serializeJson(doc, output);
+    // Serial.println(output);
+    pLiveDataCharacteristic->setValue(output);
+    pLiveDataCharacteristic->notify();
+}
+
+class LiveDataCallback : public NimBLECharacteristicCallbacks
+{
+    void onWrite(NimBLECharacteristic *pLiveDataCharacteristic)
+    {
+        std::string value = pLiveDataCharacteristic->getValue();
+
+        if (value == "START")
+        {
+            Serial.println("⚡ Starting live data stream");
+            liveDataStreaming = true;
+            liveDataTicker.attach_ms(250, sendLiveData); // Send every 500 ms
+        }
+        else if (value == "STOP")
+        {
+            Serial.println("🛑 Stopping live data stream");
+            liveDataStreaming = false;
+            liveDataTicker.detach();
+        }
+    }
+};
 
 void checkSerial1and2Status()
 {
@@ -359,8 +474,8 @@ void stopSerial1and2ForBLE()
 
 void startBLEServer()
 {
-  //  stopSerial1and2ForBLE(); // Stop Serial1 and Serial2 to free up CPU time
-  //  Serial.println("Turning off Serial1 and Serial2 to free up CPU time");
+    //  stopSerial1and2ForBLE(); // Stop Serial1 and Serial2 to free up CPU time
+    //  Serial.println("Turning off Serial1 and Serial2 to free up CPU time");
     Serial.println("Starting NimBLE Server");
 
     NimBLEDevice::init("JT DataLogger_1");
@@ -402,6 +517,27 @@ void startBLEServer()
     pDownloadFileCharacteristic->setCallbacks(new DownloadFileCallback());
 
     //-----------------------------------------------------------------------------------------------
+    // Logger Settings
+    NimBLECharacteristic *pSettingsCharacteristic = pBaadService->createCharacteristic(
+        "B00D",
+        NIMBLE_PROPERTY::READ |
+            NIMBLE_PROPERTY::WRITE |
+            NIMBLE_PROPERTY::NOTIFY);
+
+    pSettingsCharacteristic->setValue(""); // Clear any old/stale data
+
+    pSettingsCharacteristic->setCallbacks(new LoggerSettingsCallback());
+
+    //-----------------------------------------------------------------------------------------------
+
+    pLiveDataCharacteristic = pBaadService->createCharacteristic(
+        "C00D", NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::WRITE);
+
+    pLiveDataCharacteristic->setValue(""); // Clear any old/stale data
+
+    pLiveDataCharacteristic->setCallbacks(new LiveDataCallback());
+
+    //-----------------------------------------------------------------------------------------------
 
     pBaadService->start();
 
@@ -414,7 +550,7 @@ void startBLEServer()
 }
 //----------------------------------------------------------------------------------------------
 
-// === STOP BLE ===
+//=== STOP BLE ===
 void stopBLEServer()
 {
     Serial.println("Stopping BLE...");
@@ -436,72 +572,55 @@ void stopBLEServer()
 // }
 //----------------------------------------------------------------------------------------
 
-
-void setFramHeader(const char *name)
-{
-    // Fill header with initial values
-
-    strncpy(header.fileName, name, sizeof(header.fileName) - 1); // copy "name" to header.filename, the sizeof bit tells the function how many characters to copy? maybe
-    header.fileName[sizeof(header.fileName) - 1] = '\0';         // Ensure null-termination
-    header.dataLength = 0;                                       // Start with zero data length
-
-    fram.writeEnable(true);
-    fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // starts at position 0, writes the header to FRAM
-    fram.writeEnable(false);
-
-    Serial.println("Filename set, Logging started");
-    Serial.println(header.fileName);
-    Serial.println(sizeof(header));
-
-    fram.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM);
-    Serial.println("This is the file name from fram");
-    Serial.println(header2.fileName);
-}
-
-void flushRingToFram()
-{
-    fram.writeEnable(true);
-    fram.write(currentDataAddress, (uint8_t *)&record, sizeof(record));
-    // uint8_t *bytePtr = (uint8_t *)&record;
-    // Serial.println("Raw bytes of record just written:");
-    // for (int i = 0; i < sizeof(record); i++)
-    // {
-    //     Serial.printf("Byte[%d] = %u\n", i, bytePtr[i]);
-    // }
-    fram.writeEnable(false);
-
-
-    currentDataAddress += sizeof(record);
-    header.dataLength += sizeof(record);
-
-    fram.writeEnable(true);
-    fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // Update the header with the new data length
-    fram.writeEnable(false);
-}
-
-//------------------------------------------------------------------------------------------------
-
 void setup()
 {
-    pinMode(LED_1, OUTPUT);
-    pinMode(LED_2, OUTPUT);
+    pinMode(RED_LED, OUTPUT);
+    pinMode(GREEN_LED, OUTPUT);
     pinMode(LAMBDA_CONTROL_PIN, OUTPUT);
-    pinMode(SEND_RPM_ENABLE_PIN, OUTPUT);
+    // pinMode(SEND_RPM_ENABLE_PIN, OUTPUT);
+    pinMode(TACHO_PIN, INPUT_PULLDOWN);
+    digitalWrite(LAMBDA_CONTROL_PIN, HIGH); // LAMBDA HEATER OFF
 
     Serial.begin(115200);
-    Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1); // RXD1 = GPIO 27 TXD1 = GPIO 13, slave esp32
-    Serial1.setRxBufferSize(256);                // Optional: bigger internal UART buffer
-    Serial2.begin(9600);                         // TX = GPIO 17 RX = 16, GPS UNIT
+    Serial1.begin(115200, SERIAL_8N1, RXD1, TXD1); // RXD1 = GPIO 27 TXD1 = GPIO 13, slave esp32
     Wire.begin();
     setupADS(); // SETUP ADC
+    Serial2.begin(9600);
+    // delay(1000);     // Wait for GPS to boot
+    // Serial2.flush(); // Clear the buffer
 
-    
-    // send configuration data in UBX protocol
+    // Serial2.write("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n"); // GGA + RMC
+    // delay(200);
+    // Serial2.write("$PMTK300,100,0,0,0,0*2C\r\n"); // Fix interval 100ms
+    // delay(200);
+    // Serial2.write("$PMTK220,100*2F\r\n"); // Output rate 100ms
+
+    // Serial2.begin(115200); // TX = GPIO 17 RX = 16, GPS UNIT
+    // // send configuration data in UBX protocol
+    // Serial.println("Sending UBX commands to configure GPS...");
     for (int i = 0; i < sizeof(UBLOX_INIT); i++)
     {
         Serial2.write(pgm_read_byte(UBLOX_INIT + i));
-        delay(5); // simulating a 38400baud pace (or less), otherwise commands are not accepted by the device.
+        delayMicroseconds(5000);
     }
+    // // //
+    // // delay(2000);
+    // // Serial2.println("$PMTK220,100*2F"); // 10Hrz update rate
+    // // delay(2000);
+    // // Serial2.println("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28");
+
+    // delay(1000);
+    // Serial2.flush(); // Clear any remaining data
+
+    // Serial2.write("$PMTK300,100,0,0,0,0*2C\r\n"); // Position fix rate every 100ms
+    // delay(200);
+    // Serial2.write("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n"); // Set NMEA output
+    // delay(200);
+    // Serial2.write("$PMTK220,100*2F\r\n");                                   // Set update rate to 10Hz
+    // delay(200);
+    // // Serial2.println("$PMTK220,100*2F");
+
+    Serial.println("UBX commands sent.");
     //-----------------------------------------------------------------------
     if (!fsHandler.begin())
     {
@@ -520,7 +639,7 @@ void setup()
     while (!Serial)
         delay(10); // will pause Zero, Leonardo, etc until serial console opens
 
-    if (fram.begin())
+    if (fram1.begin())
     {
         Serial.println("Found SPI FRAM");
     }
@@ -531,15 +650,28 @@ void setup()
             ;
     }
     //-----------------------------------------------------------------------
-    fram.setAddressSize(addrSizeInBytes);                            // Set the address size for the FRAM chip, mucho importante!!
-    fram.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM
+    fram1.setAddressSize(addrSizeInBytes); // Set the address size for the FRAM chip, mucho importante!!
+
+    //------------------------------------------------------------------------------------
+
+    fram1.read(HEADER_ADDRESS, (uint8_t *)&header2, sizeof(header2)); // Read the header from FRAM
     Serial.println("This is the file name about to be saved to LittleFS");
     Serial.println(header2.fileName);
+
     Serial.println("Data length");
     Serial.println(header2.dataLength);
 
-    if (!LittleFS.exists(header2.fileName))
+    if (header2.fileName[0] != '/')
     {
+        Serial.println("Data does not start with /, so it is not a valid file name");
+    }
+    else if
+
+        (!LittleFS.exists(header2.fileName))
+    {
+        // digitalWrite(RED_LED, HIGH);
+        digitalWrite(RED_LED, !digitalRead(RED_LED));
+
         static const size_t BUFFER_SIZE = 512;
         uint8_t buffer2[BUFFER_SIZE]; // allocated on the stack
         uint32_t address = DATA_START;
@@ -548,11 +680,12 @@ void setup()
         size_t bytesLeft = header2.dataLength;
         while (bytesLeft > 0)
         {
+            digitalWrite(RED_LED, !digitalRead(RED_LED));
             // Decide how many bytes to read this iteration
             size_t toRead = (bytesLeft < BUFFER_SIZE) ? bytesLeft : BUFFER_SIZE;
 
             // Read that chunk from FRAM
-            fram.read(address, buffer2, toRead);
+            fram1.read(address, buffer2, toRead);
 
             // Write the chunk to the file
             fsHandler.writeData(header2.fileName, buffer2, toRead);
@@ -567,14 +700,17 @@ void setup()
         Serial.print(header2.dataLength);
         Serial.print(" bytes to ");
         Serial.println(header2.fileName);
+        digitalWrite(RED_LED, LOW);
+        //  ESP.restart(); // Restart the ESP32, so to make sure GPS gets setup commands again
     }
     else
     {
         Serial.println("File already exists so no need to write to LittleFS");
     }
+    //------------------------------------------------------------------------------------
     String tempFileList = fsHandler.listFiles();
     Serial.println(tempFileList);
-    delay(1000);
+    delay(500);
 
     //-----------------------------------------------------------------------
     // Paths for the old and new filenames
@@ -603,7 +739,8 @@ void setup()
     // na1410202420:30.txt
 
     //-----------------------------------------------------------------------
-    String filePath = "/na0103202522:15.txt"; // File to delete
+    String filePath = "/1VAN1000000000123223072025.txt"; // File to delete
+
     // Check if the file exists before trying to remove it
     if (LittleFS.exists(filePath))
     {
@@ -619,7 +756,7 @@ void setup()
     }
     else
     {
-        Serial.println("File does not exist");
+        Serial.println("File to delete does not exist");
     }
     // Optionally, unmount LittleFS when done
     //  LittleFS.end();
@@ -631,140 +768,89 @@ void setup()
     // }
 
     // Read data from a file
-    // String fileData = fsHandler.readData("/ho2601202509:00.txt");
-    // Serial.println("Little FS File Data: " + fileData);
+    //    loggerId = fsHandler.readData("/loggerId.txt");
+    //    Serial.println("ID read from Little FS: " + loggerId);
 
     // fileSize = fsHandler.getFileSize("/data2.txt"); // get the file size
 
     // fsHandler.listFiles(); // List all files in LittleFS
     //-----------------------------------------------------------------------
 
-        startBLEServer();
-        isBleServerStarted = true; // Set flag to indicate BLE server has started
+    //  fsHandler.formatLittleFS(); // WARNING! formats/erase all data from flash file system
+
+    loadLoggerSettings();               // put logger settings in to memory
+    loadEngineTemperatureCalibration(); // put temperature calibration settings in to memory
+    loadAirTemperatureCalibration();
+    startBLEServer();
+    isBleServerStarted = true; // Set flag to indicate BLE server has started
+    //----------------------------------------------------------------------------------------
+    //    if (!preferences.begin("settings", false))
+    //    {
+    //        Serial.println("Failed to open preferences. Formatting NVS...");
+    //        nvs_flash_erase(); // Erase the NVS partition
+    //        nvs_flash_init();  // Reinitialize NVS
+    //    }
+    // preferences.end();
+
+    digitalWrite(GREEN_LED, HIGH); // just showing the loop is running GREEN
+
+    //----------------------------------------------------------------------------------------
+    xTaskCreatePinnedToCore(
+        loggerTask,   // Task function
+        "LoggerTask", // Name
+        8192,         // Stack size (adjust if needed)
+        NULL,         // Parameters
+        1,            // Priority
+        NULL,         // Task handle (optional)
+        0             // Core (0 or 1)
+    );
     //----------------------------------------------------------------------------------------
 
+    xTaskCreatePinnedToCore(
+        gpsTask,
+        "GpsTask",
+        4096,
+        NULL,
+        2, // higher priority good, bad??
+        NULL,
+        1);
+    //----------------------------------------------------------------------------------------
 }
-
-const int numReadings = 50; // Number of readings to average
-double afrReadings[numReadings] = {0}; // Array to store readings
-int afrIndex = 0; // Current index in the array
-double afrSum = 0; // Sum of all readings
-double afrAverage = 0; // Average AFR voltage
-
-
-
 
 void loop()
 {
-    static unsigned long lastFastLogTime = 0;
-    static unsigned long lastRead = 0;
-    static int skipEntries = 20; // Counter to skip the first twenty entries, 2 seconds worth of data
+    // digitalWrite(SEND_RPM_ENABLE_PIN, HIGH); // for debug and live data, ********** MAKE AUTO **********
+    // uartTask();
+    tacho();
+    //  digitalWrite(LAMBDA_CONTROL_PIN, LOW); // LOW = SWITCHES HEATER CIRCUIT ON
 
+    static float filtered_engTemp = 0.0; // Initialize with a default value
+    filtered_engTemp = 0.1 * cachedCoolantTemp + 0.9 * filtered_engTemp;
 
-    // Process GPS data
-    if (Serial2.available() > 0)
-    { 
-        gps.encode(Serial2.read());
-
-
-        if (gps.location.isUpdated() && makeTimeStamp)
-
-            {
-                Serial.println("GPS location updated");
-                String venue = detectVenue(gps.location.lat(), gps.location.lng());
-
-                int day = gps.date.day();
-                int month = gps.date.month();
-                int year = gps.date.year();
-                int hour = gps.time.hour();
-                int min = gps.time.minute();
-                makeTimeStamp = false; // reset the timestamp flag stops the timestamp from being created again
-
-                formattedDay = (day < 10) ? "0" + String(day) : String(day);
-                formattedmonth = (month < 10) ? "0" + String(month) : String(month);
-                formattedHour = (hour < 10) ? "0" + String(hour) : String(hour);
-                formattedMin = (min < 10) ? "0" + String(min) : String(min);
-
-               // logId = "/" + venue + formattedDay + formattedmonth + String(year) + formattedHour + ":" + formattedMin + ".txt";
-                logId = "/" + venue + id + version + fastestLapNumber + fastestLapTime + formattedHour + formattedMin + formattedDay + formattedmonth + String(year) + ".txt";
-                Serial.print("First print of logID = ");
-                Serial.println(logId);
-            }
-
-        if (!loggerStarted && gps.location.isUpdated() && gps.speed.mph() > SPEED_THRESHOLD)
-           // if (!loggerStarted)
-            {
-                Serial.println("Logging started");
-                loggerStarted = true;
-                setFramHeader(logId.c_str());
-                Serial.println(logId);
-                digitalWrite(LED_1, HIGH);               // LED to show logging is started
-                digitalWrite(SEND_RPM_ENABLE_PIN, HIGH); // tell the slave esp32 to start sending data
-                digitalWrite(LAMBDA_CONTROL_PIN, HIGH); // TEMP, CONTROL BY ENGINE TEMPERATURE LATER 
-                stopBLEServer();                         // Stop BLE server to free up CPU time
-                Serial.println("Stopping BLE server to free up CPU time");
-            }
-    }
-    
-    // Fast logging interval
-    if (loggerStarted && gps.location.isValid() && millis() - lastFastLogTime >= fastLoggingInterval)
+    if (filtered_engTemp > 6) // 6.0 = 60 degrees
     {
-        lastFastLogTime = millis();
-        double lat = gps.location.lat();
-        double lon = gps.location.lng();
-        uint32_t now = millis();
-
-        lapTimer.checkLap(lat, lon, now);
-
-        // if (lapTimer.checkLap(lat, lon, now))
-        // {     
-        //     Serial.print("Lap complete! Time: ");
-        //     Serial.println(lapTimer.getLastLapTime()); // or maybe light a led or something?
-        // }
-
-        // Skip the first xxxx entries
-        if (skipEntries > 0)
-        {
-            skipEntries--;
-        }
-        else
-        {
-            record.timestamp = millis();
-            record.lat = gps.location.lat();
-            record.lng = gps.location.lng();
-            record.mph = gps.speed.mph() * 10;
-            record.rpm = rpm;
-            record.tps = (readTps(ADS1, 2)); // 0-100% throttle position sensor
-            record.afr = (mapLambda(ADS2, 0, 3300.0, 6800.0));
-            record.iPressure = (readSensor(ADS1, 1, 3300.0, 6800.0)); // probably kpa 0-100
-            record.airTemperature = (readSensor(ADS2, 2, 3300.0, 6800.0));
-            record.coolantTemperature = (readSensor(ADS2, 3, 3300.0, 6800.0));
-            record.oilPressure = (readSensor(ADS1, 3, 3300.0, 6800.0)); // 0
-            record.bVoltage = (readSensor(ADS2, 1, 49900.0, 10000.0));  // 20 to ? volts battery voltage 49.9k to 10k
-            record.spare = (readSensor(ADS1, 0, 3300.0, 6800.0));       // spare
-
-            flushRingToFram();
-        }
+        digitalWrite(LAMBDA_CONTROL_PIN, LOW); // LOW = SWITCHES HEATER CIRCUIT ON
     }
 
-   // Serial.println((mapLambda(ADS2, 0, 3300.0, 6800.0)));
 
-    // Serial.println(rpm);
-    // Serial.println(readSensor(ADS1, 0, 3300.0, 6800.0)); // 5 to 3.3 volts
-    //  Serial.println(readSensor(ADS1, 3, 3300.0, 6800.0)); // oil pressure
-    // Serial.println(readSensor(ADS1, 1, 3300, 6800.0)); // spare 2
+    // Serial.println(exp_engTemp);
+    // Serial.println(LAMBDA_CONTROL_PIN);
 
+    // Serial.print("AFR Voltage ");
+    // Serial.print(doubleReadSensor(ADS1, 1, 3300.0, 6800.0)); // AFR VOLTAGE TEST... MEASUREING SPARE 1
+    // Serial.print("  ");
+    // Serial.println(mapLambda(ADS2, 0, 3300.0, 6800.0));
     //----------------------------------------------------------------------------------
     // Serial.println(ADS1.readADC(2));                                // read the raw value from the TPS ADC
     // Serial.println(readSensor(ADS1, 2, 3300, 6800.0));                       // TPS VOLTAGE
     // Serial.println(readTps(ADS1, 2));                                         // TPS VALUE
     //------------------------------------------------------------------------------------
 
-    // Serial.print("Battery: ");
+    //  Serial.print("Battery: ");
     //  Serial.println(readSensor(ADS2, 1, 49900.0, 10000.0)); // BATT VOLTAGE TEST
-    // Serial.print("AFR Voltage ");
-    // Serial.println(readSensor(ADS2, 0, 3300.0, 6800.0)); // AFR VOLTAGE TEST
-    // Serial.print("Air Temp Voltage ");
+
+    // Serial.print("Air Temperaure ");
+    // Serial.println(interpolateAirTemperature(ADS2, 2));
 
     //------------------------------------------------------------------------------------------------
     // Read AFR voltage and calculate average
@@ -785,8 +871,25 @@ void loop()
     //     Serial.println(afrAverage, 2); // Print with 2 decimal places
     //-------------------------------------------------------------------------------------------------
     // digitalWrite(LED_1, HIGH);
-    digitalWrite(LED_2, HIGH); // just showing the loop is running
-    digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);
-    // digitalWrite(LAMBDA_CONTROL_PIN, HIGH);
-    uartTask(); // TEMP, remove later?
-}
+    //    digitalWrite(LED_2, HIGH); // just showing the loop is running GREEN
+    // digitalWrite(LED_1, HIGH); // just showing the loop is running RED
+
+    // filteredValue = alpha * qsRawValue + (1.0 - alpha) * filteredValue;
+    //  float exp_engTemp = 0.1 * (interpolateTemperature(ADS2, 3, 100000.0, 100000.0)) + (1.0 - 0.1) * exp_engTemp;
+    //  //   //  Serial.println(exp_airTemp);
+    //  if (exp_engTemp > 6) // 2.5 = 25 degrees
+    //  {
+    //      digitalWrite(LAMBDA_CONTROL_PIN, LOW); // LOW = SWITCHES HEATER CIRCUIT ON
+    //  }
+
+    // Serial.print(gps.date.day());
+    // Serial.print("  ");
+    // Serial.print(gps.date.month());
+    // Serial.print("  ");
+    // Serial.println(gps.date.year());
+
+    //  Serial.print("Voltage ");
+    //  Serial.println(readSensor(ADS1, 1, 3300.0, 6800.0)); // AFR VOLTAGE TEST... MEASUREING SPARE 1
+    // Serial.println(interpolateTemperature(ADS1, 1, 3300.0, 6800.0)); // USING SPARE 2, NEED DIVIDER RESISTORS CHANGING DEPENDING ON MAX SENSOR VOLTAGE
+        // 3600 if 5 volt max = 3.269 volts
+    }

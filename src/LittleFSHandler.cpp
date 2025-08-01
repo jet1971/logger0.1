@@ -17,7 +17,7 @@ bool LittleFSHandler::begin()
 
 bool LittleFSHandler::writeData(const char *filename, const uint8_t *data, size_t length)
 {
-    File file = LittleFS.open(filename, FILE_APPEND);   // changed to FILE_APPEND was FILE_WRITE
+    File file = LittleFS.open(filename, FILE_APPEND);   
     if (!file)
     {
         Serial.println("Failed to open file for writing");
@@ -29,7 +29,7 @@ bool LittleFSHandler::writeData(const char *filename, const uint8_t *data, size_
 
     if (written == length)
     {
-        Serial.println("Data written successfully");
+      //  Serial.println("Data written successfully");
         return true;
     }
     else
@@ -121,18 +121,21 @@ String LittleFSHandler::listFiles()
         size_t fileSize = file.size();
 
         // Find positions based on expected format
-        int colonPos = temp.indexOf(':');  // Locate the time part by finding the colon
+       // int colonPos = temp.indexOf(':');  // Locate the time part by finding the colon
         int txtPos = temp.indexOf(".txt"); // Locate the end of the file extension
 
         // Extract the time part based on the colon
-        String time = temp.substring(colonPos - 2, colonPos + 3); // Extract "HH:MM"
-                                                                  // na141020248:51.txt
+        String time = temp.substring(txtPos - 12, txtPos - 8); // Extract "HH:MM"
+                                                              // na141020248:51.txt
         // Extract the venue, year, month, and day, String to date eg: cp1104202413:44.txt
-        String venue = temp.substring(colonPos - 12, colonPos - 10); // Extract venue initials, eg (cp = Cadwell Park), (na = not available)
-        String year = temp.substring(colonPos - 6, colonPos - 2);    // Extract year (2024)
-        String month = temp.substring(colonPos - 8, colonPos - 6);   // Extract month (10)
-        String day = temp.substring(colonPos - 10, colonPos - 8);    // Extract day
-        String fastestLap = "00:00.00";                              // temp value
+        String venue = temp.substring(txtPos - 26, txtPos - 25); // Extract venue initials, eg (cp = Cadwell Park), (na = not available)
+        String year = temp.substring(txtPos - 4, txtPos);    // Extract year (2024)
+        String month = temp.substring(txtPos - 6, txtPos - 4);       // Extract month (10)
+        String day = temp.substring(txtPos - 8 , txtPos - 6);        // Extract day
+        String fastestLap = temp.substring(txtPos - 19, txtPos - 12);
+        String fastestLapNumber = temp.substring(txtPos - 21, txtPos - 19);
+        String id = temp.substring(txtPos - 25, txtPos - 22);
+        String version = temp.substring(txtPos - 22, txtPos - 21);
 
         // Create a temporary JSON object to store each file's details
         // JsonObject fileObj = filesArray.createNestedObject();
@@ -160,12 +163,17 @@ String LittleFSHandler::listFiles()
         fileObj["fileSize"] = fileSize;
         fileObj["fastestLap"] = fastestLap;
         fileObj["fileName"] = temp;
+        fileObj["fastestLapNumber"] = fastestLapNumber;
+        fileObj["id"] = id;
+        fileObj["version"] = version;
+
+
 
         Serial.print("File: ");
         Serial.println(file.name());
-        // Serial.print(" ");
-        // Serial.print("Size: ");
-        // Serial.println(file.size());
+        Serial.print(" ");
+        Serial.print("Size: ");
+        Serial.println(file.size());
 
         file = root.openNextFile(); // Get the next file
     };
@@ -176,4 +184,18 @@ String LittleFSHandler::listFiles()
     return jsonString; // Return the JSON string with all file details
 }
 
-//------------------------------------------------------------------------------------------------
+// //----------------------------------------------------------------------------------------------
+void LittleFSHandler::formatLittleFS()
+{
+    Serial.println("Formatting LittleFS...");
+    if (LittleFS.format())
+    {
+        Serial.println("LittleFS formatted successfully.");
+    }
+    else
+    {
+        Serial.println("Failed to format LittleFS.");
+    }
+}
+
+// //----------------------------------------------------------------------------------------------

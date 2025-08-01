@@ -1,12 +1,12 @@
-#ifndef UARTTASK_H
-#define UARTTASK_H
+// #ifndef UARTTASK_H
+// #define UARTTASK_H
 
-#include "Arduino.h"
+// #include "Arduino.h"
 
-extern char uartBuffer[16]; // "extern" = tells the compiler it exists somewhere
-extern uint8_t uartIndex;
-extern uint32_t rpm; // rpm variable will be defined in .cpp
+// extern char uartBuffer[]; // "extern" = tells the compiler it exists somewhere
+// extern uint8_t uartIndex;
+// extern uint32_t rpm; // rpm variable will be defined in .cpp
 
-void uartTask(); // Function prototype
+// void tacho(); // Function prototype
 
-#endif // UARTTASK_H
+// #endif // UARTTASK_H

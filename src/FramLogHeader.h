@@ -5,12 +5,13 @@
 
 struct FramLogHeader
 {
-    char fileName[36];
+    char fileName[32];
     uint32_t dataLength;
 };
 
 // Extern declaration so it can be shared
 //(just a promise, not a definition)
 extern FramLogHeader header;
+extern FramLogHeader header2;
 
 #endif // FRAM_LOG_HEADER_H

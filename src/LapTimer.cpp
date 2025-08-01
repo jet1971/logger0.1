@@ -4,27 +4,26 @@
 
 bool LapTimer::updateFramFilenameIfNewBest(char *fileName, size_t length)
 {
-    if (length < 36)
+    if (length < 32)
         return false; // Safety check: prevent overflow
 
     // Convert fastest lap number and time to 2-digit and 6-digit strings
     char lapNumStr[3];
-    snprintf(lapNumStr, sizeof(lapNumStr), "%02u", fastestLapNumber);// format fastestLapNumber as 2-digit string, copy to lapNumStr array(buffer)
+    snprintf(lapNumStr, sizeof(lapNumStr), "%02u", fastestLapNumber); // format fastestLapNumber as 2-digit string, copy to lapNumStr array(buffer)
 
     char lapTimeStr[8];
     snprintf(lapTimeStr, sizeof(lapTimeStr), "%07lu", fastestLapTime);
 
-    // Copy into positions 7–8 and 9–14 (0-based index)
-    memcpy(&fileName[6], lapNumStr, 2);  // Best Lap Number: pos 7–8, (6 in 0-based index)
+    // Copy into positions 7–8 and 9–15 (0-based index)
+    memcpy(&fileName[6], lapNumStr, 2);  // Best Lap Number: pos 7–8, (6 in 0-based index), copy lapNumStr to fileName at position 6
     memcpy(&fileName[8], lapTimeStr, 7); // Best Lap Time: pos 9–15, (8 in 0-based index)
 
-    fram.writeEnable(true);
-    fram.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // Update the header 
-    fram.writeEnable(false);
+    fram1.writeEnable(true);
+    fram1.write(HEADER_ADDRESS, (uint8_t *)&header, sizeof(header)); // Update the header
+    fram1.writeEnable(false);
 
     return true;
 }
-
 
 LapTimer::LapTimer(double lat1, double lon1, double lat2, double lon2, double triggerDistance, uint32_t debounceMs)
     : lineLat1(lat1), lineLon1(lon1), lineLat2(lat2), lineLon2(lon2),
@@ -153,8 +152,8 @@ bool LapTimer::checkLap(double lat, double lon, uint32_t timestamp)
     bool crossed = segmentsIntersect(prevX, prevY, currX, currY, x3, y3, x4, y4);
 
     // Debug: Print crossing state
-    Serial.print("Crossed Line: ");
-    Serial.println(crossed ? "Yes" : "No");
+    // Serial.print("Crossed Line: ");
+    // Serial.println(crossed ? "Yes" : "No");
 
     prevX = currX;
     prevY = currY;
@@ -170,15 +169,18 @@ bool LapTimer::checkLap(double lat, double lon, uint32_t timestamp)
         // Ignore the first crossing
         if (ignoreFirstLap)
         {
-            Serial.println("Ignoring first crossing.");
-            ignoreFirstLap = false; // Clear the flag after the first crossing
-            wasOverLine = true;     // Set to true to avoid immediate re-triggering
+            //    Serial.println("Ignoring first crossing.");
+            ignoreFirstLap = false;   // Clear the flag after the first crossing
+            wasOverLine = true;       // Set to true to avoid immediate re-triggering
             lastLapStart = timestamp; // Reset the last lap start time
+            currentLap = 1;           // Set current lap to 1
+            // Serial.println("Current lap set to:");
+            // Serial.println(currentLap);
             return false;
         }
         // Debug: Print debounce check
-        Serial.print("Debounce Check: Time since last lap = ");
-        Serial.println(timestamp - lastLapStart);
+        // Serial.print("Debounce Check: Time since last lap = ");
+        // Serial.println(timestamp - lastLapStart);
 
         if (timestamp - lastLapStart >= debounceTime)
         {
@@ -186,38 +188,32 @@ bool LapTimer::checkLap(double lat, double lon, uint32_t timestamp)
             lastLapStart = timestamp;
             wasOverLine = true;
 
-            lapNumber++;
+            lapsCompleted++;
+            currentLap++;
 
             if (lastLapTime < fastestLapTime)
             {
-                fastestLapTime = lastLapTime; // Update fastest lap time
-                fastestLapNumber = lapNumber; // Update fastest lap number
+                fastestLapTime = lastLapTime;     // Update fastest lap time
+                fastestLapNumber = lapsCompleted; // Update fastest lap number
                 updateFramFilenameIfNewBest(header.fileName, sizeof(header.fileName));
             }
-        
-
-
-
-        
 
             // Debug: Print lap details
-            Serial.println("Lap crossed!");
-            Serial.print("Lap number: ");
-            Serial.println(lapNumber);
-            Serial.print("Last lap time: ");
-            Serial.println(lastLapTime);
-            Serial.print("Total laps: ");
-            Serial.println(lapNumber);
-            Serial.print("Best Lap time: ");
-            Serial.println(fastestLapTime);
-            Serial.print("Best Lap number: ");
-            Serial.println(fastestLapNumber);
-            Serial.print("Current Timestamp: ");
-            Serial.println(timestamp);
-            Serial.print("Last Lap Start: ");
-            Serial.println(lastLapStart);
-          
-            Serial.println();
+            // Serial.println("Lap crossed!");
+            // Serial.print("Last lap time: ");
+            // Serial.println(lastLapTime);
+            // Serial.print("Total laps completed: ");
+            // Serial.println(lapsCompleted);
+            // Serial.print("Best Lap time: ");
+            // Serial.println(fastestLapTime);
+            // Serial.print("Best Lap number: ");
+            // Serial.println(fastestLapNumber);
+            // Serial.print("Current Timestamp: ");
+            // Serial.println(timestamp);
+            // Serial.print("Current lap number: ");
+            // Serial.println(currentLap);
+
+            // Serial.println();
 
             wasOverLine = false; // Reset after processing the lap
             return true;
@@ -225,17 +221,20 @@ bool LapTimer::checkLap(double lat, double lon, uint32_t timestamp)
         else
         {
             // Debug: Print debounce failure
-            Serial.println("Debounce time not met. Lap not triggered.");
+            //   Serial.println("Debounce time not met. Lap not triggered.");
         }
     }
 
     wasOverLine = crossed; // Update state based on crossing
 
     // Debug: Print updated wasOverLine state
-    Serial.print("Updated wasOverLine: ");
-    Serial.println(wasOverLine ? "True" : "False");
+    // Serial.print("Updated wasOverLine: ");
+    // Serial.println(wasOverLine ? "True" : "False");
 
     return false;
 }
 
-
+uint8_t LapTimer::getCurrentLapNumber()
+{
+    return currentLap;
+}

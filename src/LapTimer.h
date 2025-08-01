@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <math.h>
 
-
 #define MAX_LAPS 50
 
 
@@ -20,9 +19,11 @@ public:
 
     bool updateFramFilenameIfNewBest(char *fileName, size_t length);
 
+    uint8_t getCurrentLapNumber();
+    
+
 private:
-    double lineLat1,
-        lineLon1;
+    double lineLat1, lineLon1;
     double lineLat2, lineLon2;
     double triggerDistance;
     uint32_t debounceTime;
@@ -34,7 +35,9 @@ private:
 
     uint32_t lastLapStart = 0;
     uint32_t lastLapTime = 0;
-    uint8_t lapNumber = 0;
+    uint8_t lapsCompleted = 0;
+    uint8_t currentLap = 0; // Current lap number
+
     uint32_t fastestLapTime = 999999999; // Initialize to a large value otherwise has no starting value
     uint8_t fastestLapNumber = 0; // Store the lap number of the fastest lap
    
@@ -42,6 +45,7 @@ private:
     void latLonToXY(double lat, double lon, double &x, double &y);
     bool segmentsIntersect(double x1, double y1, double x2, double y2,
                            double x3, double y3, double x4, double y4);
+                           
 };
 
 #endif

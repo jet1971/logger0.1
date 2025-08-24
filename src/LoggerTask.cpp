@@ -32,7 +32,7 @@ LapTimer *lapTimer = nullptr; // globally accessible
 // LapTimer lapTimer(53.475249, -2.939913, 53.475332, -2.939922, 6.0, 10000); //AINTREE
 
 // === Global variable definitions (should only exist here ONCE) ===
-int SPEED_THRESHOLD = 10; // mph
+int SPEED_THRESHOLD = 30; // mph
 
 int RED_LED = 14;
 int GREEN_LED = 2;
@@ -56,10 +56,15 @@ String fastestLapTime = "0000000";
 // TinyGPSPlus gps;
 LogRecord record;
 
+const uint32_t FRAM_SAFETY = 128; // keep 128 bytes free
+const uint32_t FRAM_USABLE_END = FRAM_SIZE - FRAM_SAFETY;
+
+const uint32_t FRAM_SIZE = 524288;
 const uint32_t DATA_START = sizeof(FramLogHeader);
 uint32_t currentDataAddress = DATA_START;
 
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
 float cachedCoolantTemp;
 
 void loggerTask(void *parameter)
@@ -144,6 +149,7 @@ void loggerTask(void *parameter)
                 record.rpm = rpm;
                 record.tps = readTps(ADS1, 3);
                 record.afr = zeitronixLambda(ADS1, 1, 3300.0, 6800.0);
+               // record.afr = dynoJetLambda(ADS1, 1, 3300.0, 6800.0);
                 record.iPressure = readSensor(ADS1, 0, 3300.0, 6800.0);
                 record.airTemperature = interpolateAirTemperature(ADS2, 2);
                 record.coolantTemperature = interpolateEngineTemperature(ADS2, 3, 100000.0, 100000.0);

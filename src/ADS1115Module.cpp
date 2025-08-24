@@ -184,3 +184,19 @@ uint8_t zeitronixLambda(ADS1115 &ads, int channel, double r1, double r2)
 
     return round(filteredLambda * 100); // Store lambda * 100 for compact logging
 }
+
+uint8_t dynoJetLambda(ADS1115 &ads, int channel, double r1, double r2)
+{
+
+    static float filteredLambda; //  0.88 = 12.93, Start at λ = 1.0 (stoich) = 14.7:1
+    const float alpha = 0.55;    // Tune for desired smoothing
+
+    float v = readAndCompensate(ads, channel, r1, r2);
+
+    float dynoJetTransferFunction = (v * 1.6 + 10.0) / 14.7;
+
+    // Apply low-pass filter
+    filteredLambda = alpha * dynoJetTransferFunction + (1.0f - alpha) * filteredLambda;
+
+    return round(filteredLambda * 100); // Store lambda * 100 for compact logging
+}

@@ -11,4 +11,5 @@ extern volatile double currentLat, currentLng, currentSpeed;
 extern volatile int day, year, month, hour, minute;
 extern volatile bool gpsValid;
 
+// extern TinyGPSPlus gps; // Declare the GPS object as extern
 #endif

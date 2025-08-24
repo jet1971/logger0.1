@@ -29,6 +29,8 @@ uint8_t mapLambda(ADS1115 &ads, int channel, double r1, double r2);
 
 uint8_t zeitronixLambda(ADS1115 &ads, int channel, double r1, double r2);
 
+uint8_t dynoJetLambda(ADS1115 &ads, int channel, double r1, double r2);
+
 double doubleReadSensor(ADS1115 &ads, int channel, double r1, double r2); // debugging.....
 
 #endif // ADS1115MODULE_H

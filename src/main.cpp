@@ -27,6 +27,8 @@
 #include "GPSTask.h"
 #include "Tacho.h"
 
+// version info 0.9.5
+
 
 Ticker liveDataTicker; // used for sending live data
 bool liveDataStreaming = false;
@@ -478,7 +480,7 @@ void startBLEServer()
     //  Serial.println("Turning off Serial1 and Serial2 to free up CPU time");
     Serial.println("Starting NimBLE Server");
 
-    NimBLEDevice::init("JT DataLogger_1");
+    NimBLEDevice::init(std::string("JT DataLogger_1 ") + loggerId.c_str());
 
     NimBLEDevice::setMTU(512);
 
@@ -586,7 +588,7 @@ void setup()
     Wire.begin();
     setupADS(); // SETUP ADC
     Serial2.begin(9600);
-    // delay(1000);     // Wait for GPS to boot
+     delay(1000);     // Wait for GPS to boot
     // Serial2.flush(); // Clear the buffer
 
     // Serial2.write("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n"); // GGA + RMC
@@ -649,6 +651,7 @@ void setup()
         while (1)
             ;
     }
+
     //-----------------------------------------------------------------------
     fram1.setAddressSize(addrSizeInBytes); // Set the address size for the FRAM chip, mucho importante!!
 
@@ -665,8 +668,58 @@ void setup()
     {
         Serial.println("Data does not start with /, so it is not a valid file name");
     }
-    else if
+//     else if
 
+//         (!LittleFS.exists(header2.fileName))
+//     {
+//         digitalWrite(RED_LED, !digitalRead(RED_LED));
+//         static const size_t BUFFER_SIZE = 512;
+//         uint8_t buffer2[BUFFER_SIZE];
+
+//         const uint32_t FRAM_TOTAL = FRAM_SIZE * 2;
+//         uint64_t endAddr = (uint64_t)DATA_START + (uint64_t)header2.dataLength;
+//         if (endAddr > FRAM_TOTAL)
+//         {
+//             Serial.println("ERROR: Data length exceeds combined FRAM capacity");
+//             return;
+//         }
+
+//         uint32_t address = DATA_START; // virtual address across both chips
+//         size_t bytesLeft = header2.dataLength;
+
+//         while (bytesLeft > 0)
+//         {
+//             digitalWrite(RED_LED, !digitalRead(RED_LED));
+//             size_t toRead = (bytesLeft < BUFFER_SIZE) ? bytesLeft : BUFFER_SIZE;
+
+//             Adafruit_FRAM_SPI *activeFram;
+//             uint32_t localAddress;
+
+//             if (address < FRAM_SIZE)
+//             {
+//                 activeFram = &fram1;
+//                 localAddress = address;
+//             }
+//             else
+//             {
+//                 activeFram = &fram2;
+//                 localAddress = address - FRAM_SIZE;
+//             }
+
+//             size_t maxInThisChip = FRAM_SIZE - localAddress;
+//             size_t chunkNow = (toRead < maxInThisChip) ? toRead : maxInThisChip;
+
+//             // optional: debug when crossing chips
+//             // if (localAddress == 0 && address >= FRAM_SIZE) Serial.println("Reading from FRAM2");
+
+//             activeFram->read(localAddress, buffer2, chunkNow);
+//             fsHandler.writeData(header2.fileName, buffer2, chunkNow);
+
+//             address += chunkNow;
+//             bytesLeft -= chunkNow;
+//         }
+    
+else if 
         (!LittleFS.exists(header2.fileName))
     {
         // digitalWrite(RED_LED, HIGH);
@@ -739,7 +792,7 @@ void setup()
     // na1410202420:30.txt
 
     //-----------------------------------------------------------------------
-    String filePath = "/1VAN1000000000123223072025.txt"; // File to delete
+    String filePath = "/1"; // File to delete
 
     // Check if the file exists before trying to remove it
     if (LittleFS.exists(filePath))
@@ -776,7 +829,7 @@ void setup()
     // fsHandler.listFiles(); // List all files in LittleFS
     //-----------------------------------------------------------------------
 
-    //  fsHandler.formatLittleFS(); // WARNING! formats/erase all data from flash file system
+    // fsHandler.formatLittleFS(); // WARNING! formats/erase all data from flash file system
 
     loadLoggerSettings();               // put logger settings in to memory
     loadEngineTemperatureCalibration(); // put temperature calibration settings in to memory
@@ -829,9 +882,12 @@ void loop()
 
     if (filtered_engTemp > 6) // 6.0 = 60 degrees
     {
-        digitalWrite(LAMBDA_CONTROL_PIN, LOW); // LOW = SWITCHES HEATER CIRCUIT ON
+        digitalWrite(LAMBDA_CONTROL_PIN, LOW); // LOW = SWITCHES HEATER CIRCUIT ON (only if LoggerTask is running )
     }
+   // digitalWrite(LAMBDA_CONTROL_PIN, LOW);
+    // Serial.print(Serial2.available()); // Print the number of bytes available in Serial2
 
+    //    Serial.println(filtered_engTemp);
 
     // Serial.println(exp_engTemp);
     // Serial.println(LAMBDA_CONTROL_PIN);
@@ -891,5 +947,5 @@ void loop()
     //  Serial.print("Voltage ");
     //  Serial.println(readSensor(ADS1, 1, 3300.0, 6800.0)); // AFR VOLTAGE TEST... MEASUREING SPARE 1
     // Serial.println(interpolateTemperature(ADS1, 1, 3300.0, 6800.0)); // USING SPARE 2, NEED DIVIDER RESISTORS CHANGING DEPENDING ON MAX SENSOR VOLTAGE
-        // 3600 if 5 volt max = 3.269 volts
-    }
+    // 3600 if 5 volt max = 3.269 volts
+}

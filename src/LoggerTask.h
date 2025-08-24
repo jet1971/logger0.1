@@ -27,10 +27,17 @@ extern String fastestLapTime;
 
 extern LogRecord record;
 
+extern const uint32_t FRAM_SAFETY; // keep 64 bytes free
+extern const uint32_t FRAM_USABLE_END;
+
+extern const uint32_t FRAM_SIZE;
 extern uint32_t currentDataAddress;
 extern const uint32_t DATA_START;
 extern const size_t HEADER_ADDRESS;
+
 extern float cachedCoolantTemp;
+
+
 
 // Function declaration
 void loggerTask(void *parameter);

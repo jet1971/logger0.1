@@ -142,17 +142,53 @@ String LittleFSHandler::listFiles()
         JsonObject fileObj = filesArray.add<JsonObject>();
         String venueName;
 
-        if (venue == "ho")
-        {
-            venueName = "Home";
-        }
-        else if (venue == "wo")
+        if (venue == "1")
         {
             venueName = "Work";
         }
+        else if (venue == "2")
+        {
+            venueName = "Home";
+        }
+        else if (venue == "3")
+        {
+            venueName = "Aintree";
+        }
+        else if (venue == "4")
+        {
+            venueName = "Services";
+        }
+        else if (venue == "5")
+        {
+            venueName = "Cadwell Park";
+        }
+        else if (venue == "6")
+        {
+            venueName = "Oulton Park";
+        }
+        else if (venue == "7")
+        {
+            venueName = "IOM";
+        }
+        else if (venue == "8")
+        {
+            venueName = "Brands Hatch";
+        }
+        else if (venue == "9")
+        {
+            venueName = "Snetterton";
+        }
+        else if (venue == "a")
+        {
+            venueName = "Three Sisters";
+        }
+        else if (venue == "0")
+        {
+            venueName = "Unknown Venue";
+        }
         else
         {
-            venueName = "Venue N/A";
+            venueName = "Unknown Venue";
         }
 
         fileObj["venue"] = venueName;

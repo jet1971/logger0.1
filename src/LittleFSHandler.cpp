@@ -2,6 +2,7 @@
 #include "FS.h"
 #include <ArduinoJson.h>
 
+
 // Constructor
 LittleFSHandler::LittleFSHandler()
 {
@@ -17,7 +18,7 @@ bool LittleFSHandler::begin()
 
 bool LittleFSHandler::writeData(const char *filename, const uint8_t *data, size_t length)
 {
-    File file = LittleFS.open(filename, FILE_APPEND);   
+    File file = LittleFS.open(filename, FILE_APPEND);
     if (!file)
     {
         Serial.println("Failed to open file for writing");
@@ -25,11 +26,11 @@ bool LittleFSHandler::writeData(const char *filename, const uint8_t *data, size_
     }
 
     size_t written = file.write(data, length); // Write exactly 'length' bytes
-    //file.close();
+    // file.close();
 
     if (written == length)
     {
-      //  Serial.println("Data written successfully");
+        //  Serial.println("Data written successfully");
         return true;
     }
     else
@@ -117,21 +118,29 @@ String LittleFSHandler::listFiles()
 
     while (file)
     {
+        String fileName = file.name();
+        if (!fileName.endsWith(".txt"))
+        {
+            Serial.printf("Skipping non-log file: %s\n", fileName.c_str());
+            file = root.openNextFile();
+            continue;
+        }
+
         String temp = file.name();
         size_t fileSize = file.size();
 
         // Find positions based on expected format
-       // int colonPos = temp.indexOf(':');  // Locate the time part by finding the colon
+        // int colonPos = temp.indexOf(':');  // Locate the time part by finding the colon
         int txtPos = temp.indexOf(".txt"); // Locate the end of the file extension
 
         // Extract the time part based on the colon
         String time = temp.substring(txtPos - 12, txtPos - 8); // Extract "HH:MM"
-                                                              // na141020248:51.txt
+                                                               // na141020248:51.txt
         // Extract the venue, year, month, and day, String to date eg: cp1104202413:44.txt
-        String venue = temp.substring(txtPos - 26, txtPos - 25); // Extract venue initials, eg (cp = Cadwell Park), (na = not available)
-        String year = temp.substring(txtPos - 4, txtPos);    // Extract year (2024)
-        String month = temp.substring(txtPos - 6, txtPos - 4);       // Extract month (10)
-        String day = temp.substring(txtPos - 8 , txtPos - 6);        // Extract day
+        String venueCode = temp.substring(txtPos - 26, txtPos - 25); // Extract venue code, eg (5 = Cadwell Park)
+        String year = temp.substring(txtPos - 4, txtPos);        // Extract year (2024)
+        String month = temp.substring(txtPos - 6, txtPos - 4);   // Extract month (10)
+        String day = temp.substring(txtPos - 8, txtPos - 6);     // Extract day
         String fastestLap = temp.substring(txtPos - 19, txtPos - 12);
         String fastestLapNumber = temp.substring(txtPos - 21, txtPos - 19);
         String id = temp.substring(txtPos - 25, txtPos - 22);
@@ -140,56 +149,77 @@ String LittleFSHandler::listFiles()
         // Create a temporary JSON object to store each file's details
         // JsonObject fileObj = filesArray.createNestedObject();
         JsonObject fileObj = filesArray.add<JsonObject>();
-        String venueName;
 
-        if (venue == "1")
+//------------------------------------------------------------------------------------------------------
+// This section is what sets the Venue name you see in the app and sends them to the choose download screen
+// puts a Venue Name to the Venue Code
+
+        String venueName;
+        venueName = "Unknown Venue";         
+
+        if (loadedCount > 0)                    
         {
-            venueName = "Work";
+            char codeChar = venueCode.charAt(0);
+
+            for (int i = 0; i < loadedCount; i++)
+            {
+                if (loadedVenues[i].code[0] == codeChar)
+                {
+                    venueName = loadedVenues[i].name;
+                    break;
+                }
+            }
         }
-        else if (venue == "2")
-        {
-            venueName = "Home";
-        }
-        else if (venue == "3")
-        {
-            venueName = "Aintree";
-        }
-        else if (venue == "4")
-        {
-            venueName = "Services";
-        }
-        else if (venue == "5")
-        {
-            venueName = "Cadwell Park";
-        }
-        else if (venue == "6")
-        {
-            venueName = "Oulton Park";
-        }
-        else if (venue == "7")
-        {
-            venueName = "IOM";
-        }
-        else if (venue == "8")
-        {
-            venueName = "Brands Hatch";
-        }
-        else if (venue == "9")
-        {
-            venueName = "Snetterton";
-        }
-        else if (venue == "a")
-        {
-            venueName = "Three Sisters";
-        }
-        else if (venue == "0")
-        {
-            venueName = "Unknown Venue";
-        }
-        else
-        {
-            venueName = "Unknown Venue";
-        }
+
+  //------------------------------------------------------------------------------------------------------
+        // if (venueCode == "1")
+        // {
+        //     venueName = "Work";
+        // }
+        // else if (venueCode == "2")
+        // {
+        //     venueName = "Home";
+        // }
+        // else if (venueCode == "3")
+        // {
+        //     venueName = "Aintree";
+        // }
+        // else if (venueCode == "4")
+        // {
+        //     venueName = "Services";
+        // }
+        // else if (venueCode == "5")
+        // {
+        //     venueName = "Cadwell Park";
+        // }
+        // else if (venueCode == "6")
+        // {
+        //     venueName = "Oulton Park";
+        // }
+        // else if (venueCode == "7")
+        // {
+        //     venueName = "IOM";
+        // }
+        // else if (venueCode == "8")
+        // {
+        //     venueName = "Brands Hatch";
+        // }
+        // else if (venueCode == "9")
+        // {
+        //     venueName = "Snetterton";
+        // }
+        // else if (venueCode == "a")
+        // {
+        //     venueName = "Three Sisters";
+        // }
+        // else if (venueCode == "b")
+        // {
+        //     venueName = "Portimao";
+        // }
+        // else
+        // {
+        //     venueName = "Unknown Venue";
+        // }
 
         fileObj["venue"] = venueName;
         fileObj["day"] = day;
@@ -202,8 +232,6 @@ String LittleFSHandler::listFiles()
         fileObj["fastestLapNumber"] = fastestLapNumber;
         fileObj["id"] = id;
         fileObj["version"] = version;
-
-
 
         Serial.print("File: ");
         Serial.println(file.name());

@@ -21,16 +21,6 @@ const unsigned long fastLoggingInterval = 100;
 
 LapTimer *lapTimer = nullptr; // globally accessible
 
-// LapTimer lapTimer(startLineLat, startLineLng, startLineLat2, startLineLng2, 6.0, 10000); // Work
-
-// LapTimer lapTimer(53.738728, -2.473479, 53.738616, -2.473487, 6.0, 10000); // work
-
-// LapTimer lapTimer(53.723057, -2.465386, 53.722933, -2.465327, 6.0, 10000);// Aster chase
-
-// LapTimer lapTimer(53.714574, -2.475667, 53.714570, -2.475778, 6.0, 10000); // Services, left at roundabout up to next roundabout
-
-// LapTimer lapTimer(53.475249, -2.939913, 53.475332, -2.939922, 6.0, 10000); //AINTREE
-
 // === Global variable definitions (should only exist here ONCE) ===
 int SPEED_THRESHOLD = 30; // mph
 
@@ -112,7 +102,7 @@ void loggerTask(void *parameter)
             setFramHeader(logFilename.c_str());
             digitalWrite(RED_LED, HIGH);
             digitalWrite(GREEN_LED, LOW);
-            digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);
+            digitalWrite(SEND_RPM_ENABLE_PIN, HIGH);// not needed anymore?
             stopBLEServer();
         }
 

@@ -2,7 +2,6 @@
 #define LOGGERTASK_H
 
 #include <Arduino.h>
-//#include <TinyGPSPlus.h>
 #include "LogRecord.h"
 
 // Declare global variables (defined in .cpp or main.cpp)

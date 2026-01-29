@@ -29,7 +29,6 @@
 
 // version info 0.9.5
 
-
 Ticker liveDataTicker; // used for sending live data
 bool liveDataStreaming = false;
 
@@ -49,8 +48,6 @@ bool isBleServerStarted = false; // Flag to check if BLE server is already start
 LittleFSHandler fsHandler; // Create an instance of the handler
 String gpsCoords;
 
-// Preferences preferences; // Preferences instance for storing logger settings
-
 static NimBLEServer *pServer;
 static NimBLECharacteristic *pReadFileCharacteristic;
 static NimBLECharacteristic *pDeleteFileCharacteristic;
@@ -65,35 +62,146 @@ bool acknowledgmentReceived = true;
 size_t currentFilePosition = 0; // Track the current position in the file
 size_t fileSize = 0;
 
-// logging times-----------------------------------------------------------------------
-// unsigned long lastTemperatureLogTime = 0; // For tracking temperature logging
-// unsigned long previousMillis1 = 0;
-// unsigned long previousMillis2 = 0;
-// unsigned long lastTempTime2 = 0;
-
-// unsigned long lastGpsLogTime = 0; // For tracking GPS logging
-// unsigned long lastRpmLogTime = 0; // For tracking RPM logging
-// const unsigned long slowLogginginterval = 1250;
-
-// const unsigned long tempLogInterval2 = 100;
-
-// const unsigned long gpsLogInterval = 100;
-// const unsigned long rpmLogInterval = 100;
+//------------------------------------------------------------------------------------------------
+std::string venueBuffer;
+int expectedVenueBytes = 0;
+bool receivingVenues = false;
 
 //--------------------------------------------------------------------------------------------------------
+
 const char UBLOX_INIT[] PROGMEM = {
     // Disable NMEA
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x24, // GxGGA off
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x2B, // GxGLL off
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x32, // GxGSA off
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x39, // GxGSV off
-                                                                                                    // 0xB5,0x62,0x06,0x01,0x08,0x00,0xF0,0x04,0x00,0x00,0x00,0x00,0x00,0x01,0x04,0x40, // GxRMC off
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x05, 0x47, // GxVTG off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0xF0,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x00,
+    0x24, // GxGGA off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0xF0,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x01,
+    0x2B, // GxGLL off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0xF0,
+    0x02,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x02,
+    0x32, // GxGSA off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0xF0,
+    0x03,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x03,
+    0x39, // GxGSV off
+          // 0xB5,0x62,0x06,0x01,0x08,0x00,0xF0,0x04,0x00,0x00,0x00,0x00,0x00,0x01,0x04,0x40, // GxRMC off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0xF0,
+    0x05,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x05,
+    0x47, // GxVTG off
 
     // Disable UBX
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0xDC, // NAV-PVT off
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0xB9, // NAV-POSLLH off
-    0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x13, 0xC0, // NAV-STATUS off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0x01,
+    0x07,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x17,
+    0xDC, // NAV-PVT off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0x01,
+    0x02,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x12,
+    0xB9, // NAV-POSLLH off
+    0xB5,
+    0x62,
+    0x06,
+    0x01,
+    0x08,
+    0x00,
+    0x01,
+    0x03,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x13,
+    0xC0, // NAV-STATUS off
 
     // Enable UBX
     //  0xB5,0x62,0x06,0x01,0x08,0x00,0x01,0x07,0x00,0x01,0x00,0x00,0x00,0x00,0x18,0xE1, //NAV-PVT on
@@ -101,7 +209,20 @@ const char UBLOX_INIT[] PROGMEM = {
     //  0xB5,0x62,0x06,0x01,0x08,0x00,0x01,0x03,0x00,0x01,0x00,0x00,0x00,0x00,0x14,0xC5, //NAV-STATUS on
 
     // Rate
-    0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0x64, 0x00, 0x01, 0x00, 0x01, 0x00, 0x7A, 0x12, //(10Hz)
+    0xB5,
+    0x62,
+    0x06,
+    0x08,
+    0x06,
+    0x00,
+    0x64,
+    0x00,
+    0x01,
+    0x00,
+    0x01,
+    0x00,
+    0x7A,
+    0x12, //(10Hz)
     // 0xB5,0x62,0x06,0x08,0x06,0x00,0xC8,0x00,0x01,0x00,0x01,0x00,0xDE,0x6A, //(5Hz)
     // 0xB5,0x62,0x06,0x08,0x06,0x00,0xE8,0x03,0x01,0x00,0x01,0x00,0x01,0x39, //(1Hz)
 };
@@ -293,6 +414,7 @@ class ReadFileCallback : public NimBLECharacteristicCallbacks
         }
     }
 };
+
 void sendEngineTemeperatureCalibration(NimBLECharacteristic *pCharacteristic)
 {
     JsonDocument doc;
@@ -314,10 +436,11 @@ void sendLoggerSettings(NimBLECharacteristic *pCharacteristic)
 {
     JsonDocument doc;
     doc["LoggerId"] = loggerId;
-    doc["daylightSaving"] = daylightSaving; // send these values back so they can be seen in UI
-    doc["rpmMultiplier"] = rpmMultiplier;   // NOT SURE CHECK APP IF IT USES RETURNED VALUE   //RPM FUNCTION HIDDING IN UART TASK!!
-    doc["tpsMin"] = tpsMin;                 // DON'T NEED TO RETURN THIS VALUE??
-    doc["tpsMax"] = tpsMax;                 // DON'T NEED TO RETURN THIS VALUE??
+    doc["daylightSaving"] = daylightSaving;     // send these values back so they can be seen in UI
+    doc["rpmMultiplier"] = rpmMultiplier;       // NOT SURE CHECK APP IF IT USES RETURNED VALUE   //RPM FUNCTION HIDDING IN UART TASK!!
+    doc["tpsMin"] = tpsMin;                     // DON'T NEED TO RETURN THIS VALUE??
+    doc["tpsMax"] = tpsMax;                     // DON'T NEED TO RETURN THIS VALUE??
+    doc["venueListVersion"] = venueListVersion; // Send the venue list version number, so the app can check if it needs to update venues
     // Serialize the entire JSON object
     String jsonString;
     serializeJson(doc, jsonString);
@@ -327,69 +450,161 @@ void sendLoggerSettings(NimBLECharacteristic *pCharacteristic)
 
 class LoggerSettingsCallback : public NimBLECharacteristicCallbacks
 {
+
     void onWrite(NimBLECharacteristic *pCharacteristic) override
     {
-
         std::string value = pCharacteristic->getValue();
 
+        // Try to parse it as JSON
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, value);
 
-        if (error)
+        if (!error && doc.containsKey("cmd"))
         {
-            Serial.println("❌ JSON parse error");
-            return;
-        }
+            const char *cmd = doc["cmd"];
 
-        const char *cmd = doc["cmd"];
-        if (!cmd)
-        {
-            Serial.println("❌ No 'cmd' field");
-            return;
-        }
-
-        if (strcmp(cmd, "GET_SETTINGS") == 0) // SEND THE CURRECT SETTINGS BACK TO GUI
-        {
-            sendLoggerSettings(pCharacteristic);
-        }
-
-        else if (strcmp(cmd, "SAVE_SETTINGS") == 0) // INCOMING DATA TO BE SET IN MEMORY AND SAVED TO PREFERENCES
-        {
-            loggerId = doc["loggerId"].as<String>();
-            if (loggerId.length() != 3)
+            if (strcmp(cmd, "START_VENUE_TRANSFER") == 0)
             {
-                Serial.println("Logger ID must be exactly 3 characters long.");
+                expectedVenueBytes = doc["totalBytes"] | 0;
+                venueListVersion = doc["version"].as<int>();
+                saveVenueListVersion();
+                sendLoggerSettings(pCharacteristic); // Send back updated version number
+
+                venueBuffer.clear();
+                receivingVenues = true;
+                Serial.printf("📥 Starting venue transfer (%d bytes expected)\n", expectedVenueBytes);
                 return;
             }
+            if (strcmp(cmd, "GET_SETTINGS") == 0) // SEND THE CURRECT SETTINGS BACK TO GUI
+            {
+                sendLoggerSettings(pCharacteristic);
+            }
 
-            daylightSaving = doc["daylightSaving"].as<bool>();
-            rpmMultiplier = doc["rpmMultiplier"].as<int>(); // RPM FUNCTION HIDDING IN UART TASK!!
-            tpsMin = doc["minRawTPS"].as<int>();
-            tpsMax = doc["maxRawTPS"].as<int>();
-            saveLoggerSettings(); // Write data to preferences (in settings.cpp)
+            else if (strcmp(cmd, "SAVE_SETTINGS") == 0) // INCOMING DATA TO BE SET IN MEMORY AND SAVED TO PREFERENCES
+            {
+                loggerId = doc["loggerId"].as<String>();
+                if (loggerId.length() != 3)
+                {
+                    Serial.println("Logger ID must be exactly 3 characters long.");
+                    return;
+                }
+
+                daylightSaving = doc["daylightSaving"].as<bool>();
+                rpmMultiplier = doc["rpmMultiplier"].as<int>(); // RPM FUNCTION HIDDING IN UART TASK!!
+                tpsMin = doc["minRawTPS"].as<int>();
+                tpsMax = doc["maxRawTPS"].as<int>();
+                saveLoggerSettings(); // Write data to preferences (in settings.cpp)
+            }
+            else if (strcmp(cmd, "GET_E_T_C") == 0) // ENGINE TEMPERATURE CALIBRATION, SEND BACK TO GUI
+            {
+                sendEngineTemeperatureCalibration(pCharacteristic);
+            }
+            else if (strcmp(cmd, "SAVE_E_T_C") == 0)
+            {
+                voltagePoints[0] = doc["V0"].as<float>(); // Put these values in memory
+                voltagePoints[1] = doc["V1"].as<float>();
+                voltagePoints[2] = doc["V2"].as<float>();
+                voltagePoints[3] = doc["V3"].as<float>();
+                voltagePoints[4] = doc["V4"].as<float>();
+                voltagePoints[5] = doc["V5"].as<float>();
+                voltagePoints[6] = doc["V6"].as<float>();
+                saveEngineTemperatureCalibration(); // Write data to preferences (in TemperatureFuntion.cpp)
+            }
         }
-        else if (strcmp(cmd, "GET_E_T_C") == 0) // ENGINE TEMPERATURE CALIBRATION, SEND BACK TO GUI
+
+        // Handle raw data chunks during transfer
+        if (receivingVenues)
         {
-            sendEngineTemeperatureCalibration(pCharacteristic);
-        }
-        else if (strcmp(cmd, "SAVE_E_T_C") == 0)
-        {
-            voltagePoints[0] = doc["V0"].as<float>(); // Put these values in memory
-            voltagePoints[1] = doc["V1"].as<float>();
-            voltagePoints[2] = doc["V2"].as<float>();
-            voltagePoints[3] = doc["V3"].as<float>();
-            voltagePoints[4] = doc["V4"].as<float>();
-            voltagePoints[5] = doc["V5"].as<float>();
-            voltagePoints[6] = doc["V6"].as<float>();
-            saveEngineTemperatureCalibration(); // Write data to preferences (in TemperatureFuntion.cpp)
-        }
-        else
-        {
-            Serial.print("⚠️ Unknown cmd: ");
-            Serial.println(cmd);
+            venueBuffer += value;
+
+            Serial.printf("📦 Received chunk (%d/%d)\n", venueBuffer.size(), expectedVenueBytes);
+
+            if ((int)venueBuffer.size() >= expectedVenueBytes)
+            {
+                Serial.println("✅ Full venue JSON received, parsing...");
+
+                JsonDocument fullDoc;
+                DeserializationError fullErr = deserializeJson(fullDoc, venueBuffer);
+
+                // Serial.println("Received JSON:");
+                // serializeJsonPretty(fullDoc, Serial);
+
+                venueBuffer.clear();
+                receivingVenues = false;
+
+                if (fullErr)
+                {
+                    Serial.print("❌ Venue JSON parse error: ");
+                    Serial.println(fullErr.c_str());
+                    return;
+                }
+
+                if (!fullDoc.containsKey("cmd") || strcmp(fullDoc["cmd"], "SAVE_VENUES") != 0)
+                {
+                    Serial.println("❌ Invalid or missing 'cmd' in final venue JSON");
+                    return;
+                }
+
+                loadedCount = fullDoc["count"].as<int>();
+                Serial.print("📊 Number of venues to load: ");
+                Serial.println(loadedCount);
+
+                if (!fullDoc["venues"] || !fullDoc["venues"].is<JsonArray>())
+                {
+                    Serial.println("❌ Missing 'venues' array");
+                    return;
+                }
+
+                if (loadedCount > 20)
+                    loadedCount = 20;
+
+                for (int i = 0; i < loadedCount; i++)
+                {
+                    loadedVenues[i].name = fullDoc["venues"][i]["name"].as<String>();
+                    loadedVenues[i].lat1 = fullDoc["venues"][i]["lat1"].as<double>();
+                    loadedVenues[i].lng1 = fullDoc["venues"][i]["lng1"].as<double>();
+                    loadedVenues[i].lat2 = fullDoc["venues"][i]["lat2"].as<double>();
+                    loadedVenues[i].lng2 = fullDoc["venues"][i]["lng2"].as<double>();
+                    loadedVenues[i].radius = fullDoc["venues"][i]["radius"].as<double>();
+                    loadedVenues[i].code = fullDoc["venues"][i]["code"].as<String>();
+                }
+
+                saveVenuesToJson(); // existing save function
+                Serial.println("📁 Venues saved to LittleFS");
+            }
         }
     }
 };
+
+// void sendVenueCoords(NimBLECharacteristic *pCharacteristic)
+// {
+//     JsonDocument doc;
+
+//     JsonArray arr = doc.as<JsonArray>();
+//     for (int i = 0; i < loadedCount; i++)
+//     {
+//         arr[i]["name"] = loadedVenues[i].name;
+//         arr[i]["lat1"] = loadedVenues[i].lat1;
+//         arr[i]["lng1"] = loadedVenues[i].lng1;
+//         arr[i]["lat2"] = loadedVenues[i].lat2;
+//         arr[i]["lng2"] = loadedVenues[i].lng2;
+//         arr[i]["radius"] = loadedVenues[i].radius;
+//         arr[i]["code"] = loadedVenues[i].code;
+//     }
+
+//     // Serialize the entire JSON object
+//     String jsonString;
+
+//     if (jsonString.length() > 500)
+//     {
+//         Serial.println("⚠️ Venue data too large to send via BLE");
+//         return;
+//     }
+
+//     serializeJson(arr, jsonString);
+//     pCharacteristic->setValue(jsonString);
+//     pCharacteristic->notify();
+// }
 
 void sendLiveData()
 {
@@ -562,18 +777,6 @@ void stopBLEServer()
 
 //-----------------------------------------------------------------------------------------------
 
-// bool checkServerStartCondition()
-// {
-//     // Check if the button is pressed
-//     if (digitalRead(BUTTON_PIN) == HIGH)
-//     {
-//         Serial.println("Button pressed, starting BLE server...");
-//         return true;
-//     }
-//     return false;
-// }
-//----------------------------------------------------------------------------------------
-
 void setup()
 {
     pinMode(RED_LED, OUTPUT);
@@ -588,42 +791,26 @@ void setup()
     Wire.begin();
     setupADS(); // SETUP ADC
     Serial2.begin(9600);
-     delay(1000);     // Wait for GPS to boot
-    // Serial2.flush(); // Clear the buffer
+   
 
-    // Serial2.write("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n"); // GGA + RMC
-    // delay(200);
-    // Serial2.write("$PMTK300,100,0,0,0,0*2C\r\n"); // Fix interval 100ms
-    // delay(200);
-    // Serial2.write("$PMTK220,100*2F\r\n"); // Output rate 100ms
+// MOVED FROM END OF SETUP---------------------------------------------------------------------
+    // loadLoggerSettings();               // put logger settings in to memory
+    // loadEngineTemperatureCalibration(); // put temperature calibration settings in to memory
+    // loadAirTemperatureCalibration();
+    // startBLEServer();
+    // loadVenuesFromJson();
+    // delay(1000); // Wait for GPS to boot
 
-    // Serial2.begin(115200); // TX = GPIO 17 RX = 16, GPS UNIT
-    // // send configuration data in UBX protocol
-    // Serial.println("Sending UBX commands to configure GPS...");
+    //----------------------------------------------------------------------------------------
+    // Send UBX commands to configure the GPS
     for (int i = 0; i < sizeof(UBLOX_INIT); i++)
     {
         Serial2.write(pgm_read_byte(UBLOX_INIT + i));
         delayMicroseconds(5000);
     }
-    // // //
-    // // delay(2000);
-    // // Serial2.println("$PMTK220,100*2F"); // 10Hrz update rate
-    // // delay(2000);
-    // // Serial2.println("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28");
-
-    // delay(1000);
-    // Serial2.flush(); // Clear any remaining data
-
-    // Serial2.write("$PMTK300,100,0,0,0,0*2C\r\n"); // Position fix rate every 100ms
-    // delay(200);
-    // Serial2.write("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n"); // Set NMEA output
-    // delay(200);
-    // Serial2.write("$PMTK220,100*2F\r\n");                                   // Set update rate to 10Hz
-    // delay(200);
-    // // Serial2.println("$PMTK220,100*2F");
-
     Serial.println("UBX commands sent.");
-    //-----------------------------------------------------------------------
+    //-----------------------------------------------------------------------------------------
+
     if (!fsHandler.begin())
     {
         Serial.println("Failed to initialize LittleFS");
@@ -668,59 +855,7 @@ void setup()
     {
         Serial.println("Data does not start with /, so it is not a valid file name");
     }
-//     else if
-
-//         (!LittleFS.exists(header2.fileName))
-//     {
-//         digitalWrite(RED_LED, !digitalRead(RED_LED));
-//         static const size_t BUFFER_SIZE = 512;
-//         uint8_t buffer2[BUFFER_SIZE];
-
-//         const uint32_t FRAM_TOTAL = FRAM_SIZE * 2;
-//         uint64_t endAddr = (uint64_t)DATA_START + (uint64_t)header2.dataLength;
-//         if (endAddr > FRAM_TOTAL)
-//         {
-//             Serial.println("ERROR: Data length exceeds combined FRAM capacity");
-//             return;
-//         }
-
-//         uint32_t address = DATA_START; // virtual address across both chips
-//         size_t bytesLeft = header2.dataLength;
-
-//         while (bytesLeft > 0)
-//         {
-//             digitalWrite(RED_LED, !digitalRead(RED_LED));
-//             size_t toRead = (bytesLeft < BUFFER_SIZE) ? bytesLeft : BUFFER_SIZE;
-
-//             Adafruit_FRAM_SPI *activeFram;
-//             uint32_t localAddress;
-
-//             if (address < FRAM_SIZE)
-//             {
-//                 activeFram = &fram1;
-//                 localAddress = address;
-//             }
-//             else
-//             {
-//                 activeFram = &fram2;
-//                 localAddress = address - FRAM_SIZE;
-//             }
-
-//             size_t maxInThisChip = FRAM_SIZE - localAddress;
-//             size_t chunkNow = (toRead < maxInThisChip) ? toRead : maxInThisChip;
-
-//             // optional: debug when crossing chips
-//             // if (localAddress == 0 && address >= FRAM_SIZE) Serial.println("Reading from FRAM2");
-
-//             activeFram->read(localAddress, buffer2, chunkNow);
-//             fsHandler.writeData(header2.fileName, buffer2, chunkNow);
-
-//             address += chunkNow;
-//             bytesLeft -= chunkNow;
-//         }
-    
-else if 
-        (!LittleFS.exists(header2.fileName))
+    else if (!LittleFS.exists(header2.fileName))
     {
         // digitalWrite(RED_LED, HIGH);
         digitalWrite(RED_LED, !digitalRead(RED_LED));
@@ -762,7 +897,8 @@ else if
     }
     //------------------------------------------------------------------------------------
     String tempFileList = fsHandler.listFiles();
-    Serial.println(tempFileList);
+    Serial.println("line 892");
+    Serial.println(tempFileList); // dosn't print venue name from boot for some reason??
     delay(500);
 
     //-----------------------------------------------------------------------
@@ -835,6 +971,7 @@ else if
     loadEngineTemperatureCalibration(); // put temperature calibration settings in to memory
     loadAirTemperatureCalibration();
     startBLEServer();
+    loadVenuesFromJson();
     isBleServerStarted = true; // Set flag to indicate BLE server has started
     //----------------------------------------------------------------------------------------
     //    if (!preferences.begin("settings", false))
@@ -884,7 +1021,8 @@ void loop()
     {
         digitalWrite(LAMBDA_CONTROL_PIN, LOW); // LOW = SWITCHES HEATER CIRCUIT ON (only if LoggerTask is running )
     }
-   // digitalWrite(LAMBDA_CONTROL_PIN, LOW);
+
+    // digitalWrite(LAMBDA_CONTROL_PIN, LOW);
     // Serial.print(Serial2.available()); // Print the number of bytes available in Serial2
 
     //    Serial.println(filtered_engTemp);

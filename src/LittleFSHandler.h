@@ -3,6 +3,10 @@
 
 #include <Arduino.h>
 #include <LittleFS.h> // Include LittleFS
+#include <DetectVenue.h>
+
+extern Venue loadedVenues[20];
+extern int loadedCount;
 
 class LittleFSHandler
 {

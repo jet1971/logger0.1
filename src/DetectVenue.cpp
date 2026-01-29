@@ -53,8 +53,8 @@ void loadVenuesFromJson()
     Serial.printf("Loaded %d venues\n", loadedCount);
 
     Serial.print("🔎 Loaded from LittleFS: ");
-    serializeJsonPretty(doc, Serial);                  // Uncomment to print full JSON
-    Serial.println();
+    // serializeJsonPretty(doc, Serial);                  // Uncomment to print full JSON
+    // Serial.println();
 }
 
 void saveVenuesToJson()

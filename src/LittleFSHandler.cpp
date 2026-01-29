@@ -173,55 +173,6 @@ String LittleFSHandler::listFiles()
             }
         }
 
-        //------------------------------------------------------------------------------------------------------
-        // if (venueCode == "1")
-        // {
-        //     venueName = "Work";
-        // }
-        // else if (venueCode == "2")
-        // {
-        //     venueName = "Home";
-        // }
-        // else if (venueCode == "3")
-        // {
-        //     venueName = "Aintree";
-        // }
-        // else if (venueCode == "4")
-        // {
-        //     venueName = "Services";
-        // }
-        // else if (venueCode == "5")
-        // {
-        //     venueName = "Cadwell Park";
-        // }
-        // else if (venueCode == "6")
-        // {
-        //     venueName = "Oulton Park";
-        // }
-        // else if (venueCode == "7")
-        // {
-        //     venueName = "IOM";
-        // }
-        // else if (venueCode == "8")
-        // {
-        //     venueName = "Brands Hatch";
-        // }
-        // else if (venueCode == "9")
-        // {
-        //     venueName = "Snetterton";
-        // }
-        // else if (venueCode == "a")
-        // {
-        //     venueName = "Three Sisters";
-        // }
-        // else if (venueCode == "b")
-        // {
-        //     venueName = "Portimao";
-        // }
-        // else
-        // {
-        //     venueName = "Unknown Venue";
-        // }
 
         fileObj["venue"] = venueName;
         fileObj["day"] = day;

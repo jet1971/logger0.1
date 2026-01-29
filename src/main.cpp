@@ -792,15 +792,6 @@ void setup()
     setupADS(); // SETUP ADC
     Serial2.begin(9600);
    
-
-// MOVED FROM END OF SETUP---------------------------------------------------------------------
-    // loadLoggerSettings();               // put logger settings in to memory
-    // loadEngineTemperatureCalibration(); // put temperature calibration settings in to memory
-    // loadAirTemperatureCalibration();
-    // startBLEServer();
-    // loadVenuesFromJson();
-    // delay(1000); // Wait for GPS to boot
-
     //----------------------------------------------------------------------------------------
     // Send UBX commands to configure the GPS
     for (int i = 0; i < sizeof(UBLOX_INIT); i++)

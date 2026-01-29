@@ -2,7 +2,6 @@
 #include <Preferences.h>
 
 Preferences preferences; // Create a Preferences instance
-                    
 
 String loggerId = "000";     // Default Logger ID, must be exactly 3 characters
 bool daylightSaving = false; // Default daylight saving time setting
@@ -12,8 +11,8 @@ int tpsMax = 20000;
 int venueListVersion = 0;
 
 void loadLoggerSettings()
-{    
-    preferences.begin("settings", true); // Open preferences for logger settings, true = read only
+{
+    preferences.begin("settings", true);                              // Open preferences for logger settings, true = read only
     String storedLoggerId = preferences.getString("loggerId", "***"); // Default to "***" if not set
     if (storedLoggerId.length() == 3)                                 // Check if the stored logger ID is exactly 3 characters
     {
@@ -26,7 +25,7 @@ void loadLoggerSettings()
     venueListVersion = preferences.getInt("venueVersion", 0);
     preferences.end();
 
-   // saveVenueListVersion(); // Uncomment this line and comment out venueListVersion line above to reset version.
+    // saveVenueListVersion(); // Uncomment this line and comment out venueListVersion line above to reset version.
 
     Serial.println("Loading from preferences: ");
     Serial.print("Logger ID: ");
@@ -41,7 +40,6 @@ void loadLoggerSettings()
     Serial.println(tpsMax);
     Serial.print("Venue List Version Number: ");
     Serial.println(venueListVersion);
-
 }
 
 void saveLoggerSettings()
@@ -68,7 +66,7 @@ void saveLoggerSettings()
     loadLoggerSettings();
 }
 
-void saveVenueListVersion()// This is just the number of the list, sent to app to check if update needed
+void saveVenueListVersion() // This is just the number of the list, sent to app to check if update needed
 {
     preferences.begin("settings", false); // write mode
     preferences.putInt("venueVersion", venueListVersion);

@@ -2,6 +2,8 @@
 #include "FS.h"
 #include <ArduinoJson.h>
 
+// GIT PRACTISE
+////////////////
 
 // Constructor
 LittleFSHandler::LittleFSHandler()
@@ -138,9 +140,9 @@ String LittleFSHandler::listFiles()
                                                                // na141020248:51.txt
         // Extract the venue, year, month, and day, String to date eg: cp1104202413:44.txt
         String venueCode = temp.substring(txtPos - 26, txtPos - 25); // Extract venue code, eg (5 = Cadwell Park)
-        String year = temp.substring(txtPos - 4, txtPos);        // Extract year (2024)
-        String month = temp.substring(txtPos - 6, txtPos - 4);   // Extract month (10)
-        String day = temp.substring(txtPos - 8, txtPos - 6);     // Extract day
+        String year = temp.substring(txtPos - 4, txtPos);            // Extract year (2024)
+        String month = temp.substring(txtPos - 6, txtPos - 4);       // Extract month (10)
+        String day = temp.substring(txtPos - 8, txtPos - 6);         // Extract day
         String fastestLap = temp.substring(txtPos - 19, txtPos - 12);
         String fastestLapNumber = temp.substring(txtPos - 21, txtPos - 19);
         String id = temp.substring(txtPos - 25, txtPos - 22);
@@ -150,14 +152,14 @@ String LittleFSHandler::listFiles()
         // JsonObject fileObj = filesArray.createNestedObject();
         JsonObject fileObj = filesArray.add<JsonObject>();
 
-//------------------------------------------------------------------------------------------------------
-// This section is what sets the Venue name you see in the app and sends them to the choose download screen
-// puts a Venue Name to the Venue Code
+        //------------------------------------------------------------------------------------------------------
+        // This section is what sets the Venue name you see in the app and sends them to the choose download screen
+        // puts a Venue Name to the Venue Code
 
         String venueName;
-        venueName = "Unknown Venue";         
+        venueName = "Unknown Venue";
 
-        if (loadedCount > 0)                    
+        if (loadedCount > 0)
         {
             char codeChar = venueCode.charAt(0);
 
@@ -171,7 +173,7 @@ String LittleFSHandler::listFiles()
             }
         }
 
-  //------------------------------------------------------------------------------------------------------
+        //------------------------------------------------------------------------------------------------------
         // if (venueCode == "1")
         // {
         //     venueName = "Work";
